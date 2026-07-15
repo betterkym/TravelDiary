@@ -267,12 +267,16 @@ input::placeholder {
   border: 1px solid rgba(111, 80, 66, 0.12);
   background: rgba(255, 255, 255, 0.82);
   color: var(--ink);
-  padding: 9px 12px;
+  width: 42px;
+  height: 42px;
+  padding: 0;
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 1.1rem;
   font-weight: 800;
   cursor: pointer;
   box-shadow: 0 8px 18px rgba(72, 48, 35, 0.08);
+  display: inline-grid;
+  place-items: center;
 }
 
 .map-stage {
