@@ -1,0 +1,13 @@
+# Keep the deployment focused on the frontend app.
+backend/
+tests/
+scripts/__pycache__/
+requirements.txt
+README.md
+docs/
+prompts/
+uploads/
+outputs/
+.env
+.env.example
+config.local.js
