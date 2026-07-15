@@ -76,6 +76,7 @@ const elements = {
   tripSummaryText: document.getElementById('trip-summary-text'),
   diarySummaryText: document.getElementById('diary-summary-text'),
   calendarToggle: document.getElementById('calendar-toggle'),
+  diaryCalendarToggle: document.getElementById('diary-calendar-toggle'),
   tripHistory: document.getElementById('trip-history'),
   mapCanvas: document.getElementById('map'),
   recordingBadge: document.getElementById('recording-badge'),
@@ -1235,6 +1236,9 @@ function bootstrap() {
   });
   if (elements.calendarToggle) {
     elements.calendarToggle.addEventListener('click', openCalendar);
+  }
+  if (elements.diaryCalendarToggle) {
+    elements.diaryCalendarToggle.addEventListener('click', openCalendar);
   }
   if (elements.calendarClose) {
     elements.calendarClose.addEventListener('click', closeCalendar);
