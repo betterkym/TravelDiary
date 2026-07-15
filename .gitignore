@@ -2,6 +2,8 @@
 .env
 .env.local
 *.key
+# Mapbox 토큰 등 로컬 프런트 설정 (커밋 금지)
+config.local.js
 
 # 사용자 데이터 (실제 사진/위치기록은 커밋 금지)
 uploads/*
