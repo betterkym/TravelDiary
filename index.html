@@ -8,8 +8,6 @@
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.js"></script>
-    <!-- 로컬 설정(Mapbox 토큰 등). app.js 보다 먼저 실행되어야 함. config.local.js 는 gitignore 됨. -->
-    <script defer src="config.local.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -45,6 +43,8 @@
             <button class="segment-button" type="button" data-nav="diary" disabled aria-disabled="true">다이어리</button>
           </div>
           <div class="trip-chip" id="trip-summary-text"></div>
+          <div class="trip-history-label">일자별 보기</div>
+          <div class="trip-history" id="trip-history" aria-label="여행 기록 목록"></div>
         </header>
 
         <section class="map-stage card" aria-label="여행 지도 화면">

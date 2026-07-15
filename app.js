@@ -1,4 +1,5 @@
 const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
+const STORAGE_KEY = 'travel-diary.trips.v1';
 const PHOTO_SPOT_RADIUS_M = 100;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 3;
@@ -18,11 +19,16 @@ const state = {
   map: null,
   currentMarker: null,
   footprintMarkers: [],
+  routeLine: null,
   locationSamples: [],
   lastFootprintAt: 0,
   lastFootprintLngLat: null,
   generatedDiary: null,
   photoUrls: [],
+  savedTrips: [],
+  selectedTripId: null,
+  activeTripId: null,
+  activeTrip: null,
   trip: {
     title: '탈린의 겨울 산책',
     date: '2026-07-15',
@@ -67,6 +73,7 @@ const elements = {
   tripRegion: document.getElementById('trip-region'),
   tripSummaryText: document.getElementById('trip-summary-text'),
   diarySummaryText: document.getElementById('diary-summary-text'),
+  tripHistory: document.getElementById('trip-history'),
   mapCanvas: document.getElementById('map'),
   recordingBadge: document.getElementById('recording-badge'),
   recordingTime: document.getElementById('recording-time'),
@@ -155,6 +162,127 @@ function distanceMeters(a, b) {
     sinLat * sinLat +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * sinLng * sinLng;
   return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function readSavedTrips() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((trip) => ({
+      id: trip.id,
+      title: trip.title || '여행',
+      date: trip.date || '',
+      region: trip.region || '미정 지역',
+      createdAt: trip.createdAt || new Date().toISOString(),
+      status: trip.status || 'draft',
+      recording: {
+        startedAt: trip.recording?.startedAt ?? null,
+        endedAt: trip.recording?.endedAt ?? null,
+        elapsed: trip.recording?.elapsed ?? 0,
+        samples: Array.isArray(trip.recording?.samples) ? trip.recording.samples : [],
+        footprints: Array.isArray(trip.recording?.footprints) ? trip.recording.footprints : [],
+      },
+      diary: Array.isArray(trip.diary) ? trip.diary : [],
+      photos: Array.isArray(trip.photos) ? trip.photos : [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function writeSavedTrips() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.savedTrips));
+  } catch {
+    // Ignore storage quota errors in the MVP.
+  }
+}
+
+function createTripRecord(trip) {
+  return {
+    id: trip.id,
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
+    createdAt: trip.createdAt,
+    recording: {
+      startedAt: trip.recording?.startedAt ?? null,
+      endedAt: trip.recording?.endedAt ?? null,
+      elapsed: trip.recording?.elapsed ?? 0,
+      samples: trip.recording?.samples ?? [],
+      footprints: trip.recording?.footprints ?? [],
+    },
+    diary: trip.diary ?? [],
+    photos: trip.photos ?? [],
+    status: trip.status ?? 'draft',
+  };
+}
+
+function upsertSavedTrip(trip) {
+  const record = createTripRecord(trip);
+  const index = state.savedTrips.findIndex((item) => item.id === record.id);
+  if (index >= 0) {
+    state.savedTrips[index] = record;
+  } else {
+    state.savedTrips.unshift(record);
+  }
+  writeSavedTrips();
+  return record;
+}
+
+function getSelectedTrip() {
+  return state.savedTrips.find((trip) => trip.id === state.selectedTripId) || state.savedTrips[0] || null;
+}
+
+function getTripMapState(trip) {
+  if (!trip) return 'before';
+  const isActiveTrip = trip.id === state.activeTripId;
+  if (trip.status === 'recording' && isActiveTrip) return 'recording';
+  if (trip.status === 'recorded' && isActiveTrip && !(trip.diary && trip.diary.length)) return 'after';
+  return 'before';
+}
+
+function syncSelectedTripView() {
+  const trip = getSelectedTrip();
+  if (!trip) {
+    state.trip = {
+      title: elements.tripTitle.value.trim() || '새 여행',
+      date: elements.tripDate.value,
+      region: elements.tripRegion.value.trim() || '미정 지역',
+    };
+    state.generatedDiary = null;
+    state.diaryUnlocked = false;
+    updateTripTexts();
+    renderTripHistory();
+    renderTimeline(state.sampleTimeline);
+    updateNavButtons();
+    setMapState('before');
+    return null;
+  }
+
+  state.trip = {
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
+  };
+  state.generatedDiary = trip.diary && trip.diary.length ? trip.diary : null;
+  state.diaryUnlocked = Boolean(state.generatedDiary);
+  state.locationSamples = trip.recording?.samples ?? [];
+  updateTripTexts();
+  renderTripHistory();
+  renderTimeline(state.generatedDiary || state.sampleTimeline);
+  updateNavButtons();
+  setMapState(getTripMapState(trip));
+  return trip;
+}
+
+function pickTrip(tripId) {
+  state.selectedTripId = tripId;
+  const trip = syncSelectedTripView();
+  if (!trip) return;
+  if (state.screen === 'map') renderTripOnMap(trip);
 }
 
 function parseExifDate(dateString) {
@@ -285,17 +413,25 @@ function parseGpsCoordinate(ref, values, lonRef) {
 }
 
 function parsePhotoFile(file) {
-  return file.arrayBuffer().then((buffer) => {
+  return Promise.all([file.arrayBuffer(), fileToDataUrl(file)]).then(([buffer, dataUrl]) => {
     const exif = parseExifBuffer(buffer);
     return {
       id: crypto.randomUUID ? crypto.randomUUID() : `photo_${Math.random().toString(16).slice(2)}`,
-      file,
-      url: URL.createObjectURL(file),
-      name: file.name,
+      fileName: file.name,
+      dataUrl,
       takenAt: exif.takenAt || new Date(file.lastModified || Date.now()),
       lat: exif.lat ?? null,
       lng: exif.lng ?? null,
     };
+  });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -319,6 +455,88 @@ function centerMapOn(lngLat, zoom = 15.5) {
     center: lngLat,
     zoom,
     duration: 700,
+  });
+}
+
+function ensureRouteLayer() {
+  if (!state.map || state.map.getSource('trip-route-source')) return;
+  state.map.addSource('trip-route-source', {
+    type: 'geojson',
+    data: {
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [],
+      },
+      properties: {},
+    },
+  });
+  state.map.addLayer({
+    id: 'trip-route-line',
+    type: 'line',
+    source: 'trip-route-source',
+    paint: {
+      'line-color': '#c86f4f',
+      'line-width': 4,
+      'line-opacity': 0.92,
+    },
+  });
+}
+
+function setRouteLine(coordinates) {
+  if (!state.map || !state.map.getSource('trip-route-source')) return;
+  state.map.getSource('trip-route-source').setData({
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates,
+    },
+    properties: {},
+  });
+}
+
+function renderTripOnMap(trip) {
+  if (!state.map) return;
+  clearLiveMarkers();
+  ensureRouteLayer();
+
+  const samples = trip?.recording?.samples || [];
+  const coordinates = samples.map((sample) => [sample.lng, sample.lat]);
+  setRouteLine(coordinates);
+
+  (trip?.recording?.footprints || []).forEach((point) => {
+    addFootprint([point.lng, point.lat]);
+  });
+
+  const last = samples[samples.length - 1];
+  if (last) {
+    ensureCurrentMarker([last.lng, last.lat]);
+    centerMapOn([last.lng, last.lat], 15.5);
+  }
+}
+
+function renderTripHistory() {
+  if (!elements.tripHistory) return;
+  if (!state.savedTrips.length) {
+    elements.tripHistory.innerHTML = '<span class="trip-chip">저장된 여행이 아직 없어요</span>';
+    return;
+  }
+
+  elements.tripHistory.innerHTML = state.savedTrips
+    .map((trip) => {
+      const active = trip.id === state.selectedTripId;
+      return `
+        <button class="trip-history-button ${active ? 'is-active' : ''}" type="button" data-trip-id="${trip.id}">
+          ${trip.date} · ${trip.title}
+        </button>
+      `;
+    })
+    .join('');
+
+  elements.tripHistory.querySelectorAll('[data-trip-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      pickTrip(button.dataset.tripId);
+    });
   });
 }
 
@@ -356,6 +574,13 @@ function initMapIfNeeded() {
     zoom: 2.5,
     attributionControl: false,
   });
+  state.map.on('load', () => {
+    ensureRouteLayer();
+    const trip = getSelectedTrip();
+    if (trip) {
+      renderTripOnMap(trip);
+    }
+  });
 }
 
 function setScreen(screen) {
@@ -376,10 +601,16 @@ function setScreen(screen) {
 
 function setMapState(mapState) {
   state.mapState = mapState;
+  const isActiveTrip = state.selectedTripId && state.selectedTripId === state.activeTripId;
   elements.recordingBadge.hidden = mapState !== 'recording';
-  elements.photoImportPanel.hidden = mapState !== 'after';
-  elements.startRecording.hidden = mapState !== 'before';
+  elements.photoImportPanel.hidden = !(mapState === 'after' && isActiveTrip);
+  elements.startRecording.hidden = mapState !== 'before' || !isActiveTrip;
   elements.endRecording.hidden = mapState !== 'recording';
+  if (!isActiveTrip) {
+    elements.startRecording.hidden = true;
+    elements.endRecording.hidden = true;
+    elements.photoImportPanel.hidden = true;
+  }
 }
 
 function updateRecordingTimer() {
@@ -421,6 +652,9 @@ function clearLiveMarkers() {
   }
   state.lastFootprintLngLat = null;
   state.lastFootprintAt = 0;
+  if (state.map && state.map.getSource('trip-route-source')) {
+    setRouteLine([]);
+  }
 }
 
 function addFootprint(lngLat) {
@@ -454,6 +688,15 @@ function handlePosition(position) {
     lat: lngLat[1],
     timestamp,
   });
+  if (state.activeTrip) {
+    state.activeTrip.recording.samples.push({
+      lng: lngLat[0],
+      lat: lngLat[1],
+      timestamp,
+    });
+    setRouteLine(state.activeTrip.recording.samples.map((sample) => [sample.lng, sample.lat]));
+    upsertSavedTrip(state.activeTrip);
+  }
 
   ensureCurrentMarker(lngLat);
   centerMapOn(lngLat);
@@ -466,6 +709,14 @@ function handlePosition(position) {
 
   if (shouldDropFootprint) {
     addFootprint(lngLat);
+    if (state.activeTrip) {
+      state.activeTrip.recording.footprints.push({
+        lng: lngLat[0],
+        lat: lngLat[1],
+        timestamp,
+      });
+      upsertSavedTrip(state.activeTrip);
+    }
     state.lastFootprintLngLat = lngLat;
     state.lastFootprintAt = timestamp;
   }
@@ -512,6 +763,11 @@ function startRecording() {
   state.recordingStartedAt = Date.now();
   state.recordingBonusSeconds = 0;
   state.recordingElapsed = 0;
+  if (state.activeTrip) {
+    state.activeTrip.recording.startedAt = new Date(state.recordingStartedAt).toISOString();
+    state.activeTrip.status = 'recording';
+    upsertSavedTrip(state.activeTrip);
+  }
   updateRecordingTimer();
   setMapState('recording');
 
@@ -528,7 +784,16 @@ function endRecording() {
   stopTracking();
   updateRecordingTimer();
   setMapState('after');
-  showToast('여행 사진 불러오기 버튼을 눌러 사진첩에서 사진을 선택해 주세요');
+  if (state.activeTrip) {
+    state.activeTrip.recording.endedAt = new Date().toISOString();
+    state.activeTrip.recording.elapsed = state.recordingElapsed;
+    state.activeTrip.status = 'recorded';
+    upsertSavedTrip(state.activeTrip);
+  }
+  state.diaryUnlocked = false;
+  updateNavButtons();
+  showToast('오늘의 여정이 사진첩과 연결되었습니다. 사진 불러오기 버튼을 눌러 주세요.');
+  return;
 }
 
 function buildClusters(photos) {
@@ -598,7 +863,7 @@ async function generateDiaryFromFiles(files) {
   const parsed = await Promise.all(files.map(parsePhotoFile));
   const photoData = parsed
     .map((photo) => {
-      if ((!photo.lat || !photo.lng) && photo.takenAt) {
+      if ((photo.lat == null || photo.lng == null) && photo.takenAt) {
         const nearest = findNearestLocationSample(photo.takenAt);
         if (nearest) {
           photo.lat = nearest.lat;
@@ -613,9 +878,6 @@ async function generateDiaryFromFiles(files) {
     showToast('촬영 시간과 위치 정보를 읽을 수 있는 사진이 필요해요.');
     return;
   }
-
-  cleanupGeneratedPhotoUrls();
-  state.photoUrls = photoData.map((photo) => photo.url);
 
   photoData.sort((a, b) => a.takenAt - b.takenAt);
   const clusters = buildClusters(photoData);
@@ -635,7 +897,7 @@ async function generateDiaryFromFiles(files) {
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.map((photo) => photo.url);
+    const photoUrls = cluster.photos.map((photo) => photo.dataUrl);
     entries.push({
       time: timeLabel,
       place,
@@ -651,7 +913,21 @@ async function generateDiaryFromFiles(files) {
 
   state.generatedDiary = entries;
   state.diaryUnlocked = true;
+  if (state.activeTrip) {
+    state.activeTrip.status = 'completed';
+    state.activeTrip.diary = entries;
+    state.activeTrip.photos = photoData.map((photo) => ({
+      id: photo.id,
+      fileName: photo.fileName,
+      dataUrl: photo.dataUrl,
+      takenAt: photo.takenAt.toISOString(),
+      lat: photo.lat,
+      lng: photo.lng,
+    }));
+    upsertSavedTrip(state.activeTrip);
+  }
   updateNavButtons();
+  renderTripHistory();
   renderTimeline(entries);
   setScreen('diary');
   showToast('오늘의 여정이 다이어리로 정리되었습니다');
@@ -715,10 +991,30 @@ function createTrip() {
   const nextRegion = elements.tripRegion.value.trim();
   cleanupGeneratedPhotoUrls();
   stopTracking();
-  state.trip = {
+  const trip = {
+    id: crypto.randomUUID ? crypto.randomUUID() : `trip_${Math.random().toString(16).slice(2)}`,
     title: nextTitle || '새 여행',
     date: elements.tripDate.value,
     region: nextRegion || '미정 지역',
+    createdAt: new Date().toISOString(),
+    status: 'recording',
+    recording: {
+      startedAt: null,
+      endedAt: null,
+      elapsed: 0,
+      samples: [],
+      footprints: [],
+    },
+    diary: [],
+    photos: [],
+  };
+  state.activeTripId = trip.id;
+  state.activeTrip = trip;
+  state.selectedTripId = trip.id;
+  state.trip = {
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
   };
   state.generatedDiary = null;
   state.diaryUnlocked = false;
@@ -728,28 +1024,38 @@ function createTrip() {
   state.recordingBonusSeconds = 0;
   clearLiveMarkers();
   updateTripTexts();
+  upsertSavedTrip(trip);
+  renderTripHistory();
   renderTimeline();
   setScreen('map');
   setMapState('before');
+  renderTripOnMap(trip);
 }
 
 function handleNav(target) {
   if (target === 'diary' && !state.diaryUnlocked) return;
+  const trip = target === 'map' || target === 'diary' ? syncSelectedTripView() : null;
   setScreen(target);
   if (target === 'map') {
-    setMapState(state.mapState);
+    if (trip) renderTripOnMap(trip);
+  }
+  if (target === 'diary') {
+    renderTimeline(state.generatedDiary || state.sampleTimeline);
   }
 }
 
 function cleanupGeneratedPhotoUrls() {
-  state.photoUrls.forEach((url) => URL.revokeObjectURL(url));
   state.photoUrls = [];
 }
 
 function bootstrap() {
+  state.savedTrips = readSavedTrips();
+  state.selectedTripId = state.savedTrips[0]?.id || null;
   syncCreateFields();
-  updateTripTexts();
-  renderTimeline();
+  syncSelectedTripView();
+  if (!state.savedTrips.length) {
+    renderTimeline(state.sampleTimeline);
+  }
   setScreen('create');
   setMapState('before');
   updateRecordingTimer();
