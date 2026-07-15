@@ -5,6 +5,41 @@
 > 현재 저장소는 완성된 AI 서비스가 아니라 **프런트엔드 인터랙션 프로토타입**입니다.  
 > 여행 생성, 지도 표시, 실시간 위치 추적, 기록 시작·종료, 다이어리 화면 전환까지 구현되어 있습니다. 사진 업로드·저장·분석·AI 선별·실제 다이어리 생성은 아직 구현되지 않았습니다.
 
+## ⚠️ 팀원 초기 설정 (한 번만, 반드시 읽기)
+
+이 저장소의 기준 브랜치는 **`master`** 입니다. `main` 이 아닙니다.  
+`git init` 으로 폴더를 직접 만들면 로컬이 `main` 이 되어 **`git pull` 을 해도 아무것도 안 바뀝니다.** 반드시 아래처럼 **`git clone`** 으로 받으세요.
+
+```bash
+# 1) 저장소 통째로 받기 (init 하지 말 것)
+git clone https://github.com/cge030809-debug/TravelDiary.git
+cd TravelDiary
+
+# 2) 내 담당 브랜치 만들기 (아래 '5인 업무 분담' 표의 브랜치 이름 사용)
+git checkout -b feat/내-브랜치        # 예: feat/photo-curation
+```
+
+### 이미 받았는데 "pull 해도 안 바뀌는" 경우
+
+로컬이 `main` 에 묶여 있는 것이 원인입니다. 아래로 고칩니다.
+
+```bash
+git branch                 # main 이라고 나오면 이게 원인
+git fetch origin
+git checkout master        # 실제 코드가 있는 브랜치로 이동 → 여기서 backend/ 폴더가 생김
+git pull origin master
+git checkout -b feat/내-브랜치
+```
+
+### 정상 확인
+
+```bash
+git log --oneline -1       # "Merge pull request #1 ..." 이 보이면 최신입니다
+ls backend/                # app.py, models.py, services/ 등이 보이면 정상
+```
+
+> 앞으로 작업 시작 전·PR 전에는 항상 `git checkout master && git pull` 로 최신을 받은 뒤, 자기 브랜치에서 `git merge master` 로 맞춰주세요. 자세한 규칙은 아래 [충돌 방지 규칙](#충돌-방지-규칙) 참고.
+
 ## 해결하려는 문제
 
 여행이 끝난 뒤 사진은 수백 장 남지만, 중복 사진을 정리하고 대표 장면을 고르고 시간순 기록으로 만드는 일은 대부분 미뤄집니다.
