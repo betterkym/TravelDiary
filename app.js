@@ -29,6 +29,8 @@ const state = {
   selectedTripId: null,
   activeTripId: null,
   activeTrip: null,
+  calendarOpen: false,
+  calendarMonth: null,
   trip: {
     title: '탈린의 겨울 산책',
     date: '2026-07-15',
@@ -73,6 +75,7 @@ const elements = {
   tripRegion: document.getElementById('trip-region'),
   tripSummaryText: document.getElementById('trip-summary-text'),
   diarySummaryText: document.getElementById('diary-summary-text'),
+  calendarToggle: document.getElementById('calendar-toggle'),
   tripHistory: document.getElementById('trip-history'),
   mapCanvas: document.getElementById('map'),
   recordingBadge: document.getElementById('recording-badge'),
@@ -84,6 +87,12 @@ const elements = {
   endRecording: document.getElementById('end-recording'),
   navButtons: Array.from(document.querySelectorAll('[data-nav]')),
   timeline: document.getElementById('timeline'),
+  calendarModal: document.getElementById('calendar-modal'),
+  calendarGrid: document.getElementById('calendar-grid'),
+  calendarMonthLabel: document.getElementById('calendar-month-label'),
+  calendarPrev: document.getElementById('calendar-prev'),
+  calendarNext: document.getElementById('calendar-next'),
+  calendarClose: document.getElementById('calendar-close'),
   toast: document.getElementById('toast'),
 };
 
@@ -164,6 +173,148 @@ function distanceMeters(a, b) {
   return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+function normalizeDateKey(dateValue) {
+  if (!dateValue) return '';
+  if (dateValue instanceof Date && !Number.isNaN(dateValue.getTime())) {
+    const year = dateValue.getFullYear();
+    const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+    const day = String(dateValue.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const text = String(dateValue).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function createLocalDate(year, monthIndex, day = 1) {
+  return new Date(year, monthIndex, day);
+}
+
+function formatCalendarMonth(date) {
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+  }).format(date);
+}
+
+function formatCalendarDay(date) {
+  return String(date.getDate());
+}
+
+function dedupeTripsByDate(trips) {
+  const seen = new Set();
+  const deduped = [];
+  trips.forEach((trip) => {
+    const key = normalizeDateKey(trip.date);
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(trip);
+  });
+  return deduped;
+}
+
+function getTripByDateKey(dateKey) {
+  return state.savedTrips.find((trip) => normalizeDateKey(trip.date) === dateKey) || null;
+}
+
+function getCalendarMonthDate() {
+  if (state.calendarMonth instanceof Date && !Number.isNaN(state.calendarMonth.getTime())) {
+    return new Date(state.calendarMonth.getFullYear(), state.calendarMonth.getMonth(), 1);
+  }
+  const selectedTrip = getSelectedTrip();
+  if (selectedTrip?.date) {
+    const parsed = new Date(`${normalizeDateKey(selectedTrip.date)}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+    }
+  }
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+function setCalendarMonth(date) {
+  state.calendarMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+  renderCalendar();
+}
+
+function openCalendar() {
+  const selectedTrip = getSelectedTrip();
+  const anchor = selectedTrip?.date
+    ? new Date(`${normalizeDateKey(selectedTrip.date)}T00:00:00`)
+    : new Date();
+  state.calendarMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  state.calendarOpen = true;
+  if (elements.calendarModal) {
+    elements.calendarModal.hidden = false;
+  }
+  renderCalendar();
+}
+
+function closeCalendar() {
+  state.calendarOpen = false;
+  if (elements.calendarModal) {
+    elements.calendarModal.hidden = true;
+  }
+}
+
+function moveCalendarMonth(delta) {
+  const current = getCalendarMonthDate();
+  setCalendarMonth(new Date(current.getFullYear(), current.getMonth() + delta, 1));
+}
+
+function renderCalendar() {
+  if (!elements.calendarGrid || !elements.calendarMonthLabel) return;
+  const monthDate = getCalendarMonthDate();
+  const year = monthDate.getFullYear();
+  const monthIndex = monthDate.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const selectedDateKey = getSelectedTrip() ? normalizeDateKey(getSelectedTrip().date) : '';
+  const tripMap = new Map(state.savedTrips.map((trip) => [normalizeDateKey(trip.date), trip]));
+
+  elements.calendarMonthLabel.textContent = formatCalendarMonth(monthDate);
+  elements.calendarGrid.innerHTML = '';
+
+  for (let i = 0; i < startOffset; i += 1) {
+    const empty = document.createElement('div');
+    empty.className = 'calendar-day is-empty';
+    elements.calendarGrid.appendChild(empty);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dayDate = createLocalDate(year, monthIndex, day);
+    const dateKey = normalizeDateKey(dayDate);
+    const trip = tripMap.get(dateKey);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-day';
+    if (trip) button.classList.add('has-trip');
+    if (dateKey === selectedDateKey) button.classList.add('is-selected');
+    button.innerHTML = `
+      <span class="calendar-day-number">${formatCalendarDay(dayDate)}</span>
+      <span class="calendar-day-label">${trip ? trip.title : '기록 없음'}</span>
+    `;
+    if (trip) {
+      button.addEventListener('click', () => {
+        pickTrip(trip.id);
+        renderTripOnMap(trip);
+        closeCalendar();
+      });
+    } else {
+      button.disabled = true;
+      button.classList.add('is-muted');
+    }
+    elements.calendarGrid.appendChild(button);
+  }
+}
+
 function readSavedTrips() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -222,12 +373,16 @@ function createTripRecord(trip) {
 
 function upsertSavedTrip(trip) {
   const record = createTripRecord(trip);
-  const index = state.savedTrips.findIndex((item) => item.id === record.id);
+  const dateKey = normalizeDateKey(record.date);
+  const index = state.savedTrips.findIndex(
+    (item) => item.id === record.id || normalizeDateKey(item.date) === dateKey,
+  );
   if (index >= 0) {
     state.savedTrips[index] = record;
   } else {
     state.savedTrips.unshift(record);
   }
+  state.savedTrips = dedupeTripsByDate(state.savedTrips);
   writeSavedTrips();
   return record;
 }
@@ -989,12 +1144,14 @@ function syncCreateFields() {
 function createTrip() {
   const nextTitle = elements.tripTitle.value.trim();
   const nextRegion = elements.tripRegion.value.trim();
+  const nextDate = elements.tripDate.value;
+  const existingSameDay = state.savedTrips.find((trip) => normalizeDateKey(trip.date) === normalizeDateKey(nextDate));
   cleanupGeneratedPhotoUrls();
   stopTracking();
   const trip = {
-    id: crypto.randomUUID ? crypto.randomUUID() : `trip_${Math.random().toString(16).slice(2)}`,
+    id: existingSameDay?.id || (crypto.randomUUID ? crypto.randomUUID() : `trip_${Math.random().toString(16).slice(2)}`),
     title: nextTitle || '새 여행',
-    date: elements.tripDate.value,
+    date: nextDate,
     region: nextRegion || '미정 지역',
     createdAt: new Date().toISOString(),
     status: 'recording',
@@ -1035,6 +1192,7 @@ function createTrip() {
 function handleNav(target) {
   if (target === 'diary' && !state.diaryUnlocked) return;
   const trip = target === 'map' || target === 'diary' ? syncSelectedTripView() : null;
+  closeCalendar();
   setScreen(target);
   if (target === 'map') {
     if (trip) renderTripOnMap(trip);
@@ -1049,7 +1207,11 @@ function cleanupGeneratedPhotoUrls() {
 }
 
 function bootstrap() {
-  state.savedTrips = readSavedTrips();
+  const loadedTrips = readSavedTrips();
+  state.savedTrips = dedupeTripsByDate(loadedTrips);
+  if (loadedTrips.length !== state.savedTrips.length) {
+    writeSavedTrips();
+  }
   state.selectedTripId = state.savedTrips[0]?.id || null;
   syncCreateFields();
   syncSelectedTripView();
@@ -1070,6 +1232,21 @@ function bootstrap() {
   elements.photoImportButton.addEventListener('click', () => {
     elements.photoInput.value = '';
     elements.photoInput.click();
+  });
+  if (elements.calendarToggle) {
+    elements.calendarToggle.addEventListener('click', openCalendar);
+  }
+  if (elements.calendarClose) {
+    elements.calendarClose.addEventListener('click', closeCalendar);
+  }
+  if (elements.calendarPrev) {
+    elements.calendarPrev.addEventListener('click', () => moveCalendarMonth(-1));
+  }
+  if (elements.calendarNext) {
+    elements.calendarNext.addEventListener('click', () => moveCalendarMonth(1));
+  }
+  elements.calendarModal?.querySelectorAll('[data-calendar-close]').forEach((button) => {
+    button.addEventListener('click', closeCalendar);
   });
   elements.photoInput.addEventListener('change', async () => {
     const files = Array.from(elements.photoInput.files || []).filter((file) => file.type.startsWith('image/'));

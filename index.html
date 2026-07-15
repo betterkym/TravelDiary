@@ -7,6 +7,7 @@
     <title>Travel Diary MVP</title>
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
+    <script defer src="config.local.js"></script>
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.js"></script>
     <script defer src="app.js"></script>
   </head>
@@ -43,6 +44,10 @@
             <button class="segment-button" type="button" data-nav="diary" disabled aria-disabled="true">다이어리</button>
           </div>
           <div class="trip-chip" id="trip-summary-text"></div>
+          <div class="map-toolbar">
+            <div class="trip-history-label">일자별 보기</div>
+            <button class="calendar-toggle" id="calendar-toggle" type="button">달력</button>
+          </div>
           <div class="trip-history-label">일자별 보기</div>
           <div class="trip-history" id="trip-history" aria-label="여행 기록 목록"></div>
         </header>
@@ -94,6 +99,29 @@
 
     <div class="toast" id="toast" hidden role="status" aria-live="polite">
       <p>오늘의 여정이 다이어리로 정리되었습니다</p>
+    </div>
+
+    <div class="calendar-modal" id="calendar-modal" hidden>
+      <button class="calendar-backdrop" type="button" data-calendar-close aria-label="달력 닫기"></button>
+      <section class="calendar-sheet" role="dialog" aria-modal="true" aria-labelledby="calendar-title">
+        <div class="calendar-head">
+          <div>
+            <p class="eyebrow">일자별 기록</p>
+            <h2 id="calendar-title">달력</h2>
+          </div>
+          <button class="calendar-close" id="calendar-close" type="button">닫기</button>
+        </div>
+        <div class="calendar-nav">
+          <button class="calendar-nav-button" id="calendar-prev" type="button">이전</button>
+          <div class="calendar-month" id="calendar-month-label"></div>
+          <button class="calendar-nav-button" id="calendar-next" type="button">다음</button>
+        </div>
+        <div class="calendar-weekdays" aria-hidden="true">
+          <span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span>
+        </div>
+        <div class="calendar-grid" id="calendar-grid"></div>
+        <p class="calendar-empty" id="calendar-empty">저장된 기록이 있는 날짜를 눌러 보세요.</p>
+      </section>
     </div>
 
     <input id="photo-input" type="file" accept="image/*" multiple hidden />
