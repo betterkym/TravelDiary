@@ -23,17 +23,25 @@
 /README.md              @betterkym
 /.github/CODEOWNERS     @betterkym
 
-# 3. GPS·경로 — 정가희
+# 3. GPS·경로 — 정가희 (모듈 + 대응 테스트)
 /backend/services/location.py   @jghkor-ctrl
 /backend/services/route.py      @jghkor-ctrl
+/tests/test_location.py         @jghkor-ctrl
+/tests/test_route.py            @jghkor-ctrl
 
-# 4. 사진 분석·선별 — 이주현
+# 4. 사진 분석·선별 — 이주현 (모듈 + 대응 테스트)
 /backend/services/exif.py       @jhlee0219
 /backend/services/quality.py    @jhlee0219
 /backend/services/dedupe.py     @jhlee0219
 /backend/services/selector.py   @jhlee0219
+/tests/test_exif.py             @jhlee0219
+/tests/test_quality.py          @jhlee0219
+/tests/test_dedupe.py           @jhlee0219
+/tests/test_selector.py         @jhlee0219
 
-# 5. 다이어리 생성 — 최고은
+# 5. 다이어리 생성 — 최고은 (모듈 + 대응 테스트)
 /backend/services/timeline.py   @cge030809
 /backend/services/diary.py      @cge030809
 /prompts/curator.txt            @cge030809
+/tests/test_timeline.py         @cge030809
+/tests/test_diary.py            @cge030809
