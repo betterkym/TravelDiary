@@ -1,7 +1,6 @@
 # 환경변수 / 비밀값
 .env
 .env.local
-config.local.js
 *.key
 # Mapbox 토큰 등 로컬 프런트 설정 (커밋 금지)
 config.local.js
