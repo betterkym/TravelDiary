@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7c8a6" />
+    <title>Travel Diary MVP</title>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.css" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="screen screen--create" data-screen="create" aria-labelledby="create-title">
+        <div class="brand-badge">Travel Diary</div>
+        <div class="hero-copy">
+          <h1 id="create-title">새 여행 시작</h1>
+          <p>여행 제목과 기본 정보를 입력하고 기록을 시작해 보세요.</p>
+        </div>
+
+        <form class="card form-card" id="create-form">
+          <label>
+            <span>여행 제목</span>
+            <input id="trip-title" name="tripTitle" type="text" placeholder="예: 탈린의 겨울 산책" required />
+          </label>
+          <label>
+            <span>여행 날짜</span>
+            <input id="trip-date" name="tripDate" type="date" required />
+          </label>
+          <label>
+            <span>여행 지역</span>
+            <input id="trip-region" name="tripRegion" type="text" placeholder="예: 에스토니아 탈린" required />
+          </label>
+          <button class="primary-button" type="button" id="create-trip-button">여행 시작</button>
+        </form>
+      </section>
+
+      <section class="screen screen--map" data-screen="map" hidden aria-labelledby="map-title">
+        <header class="top-bar">
+          <div class="segment-tabs" aria-label="화면 전환">
+            <button class="segment-button is-active" type="button" data-nav="map">지도</button>
+            <button class="segment-button" type="button" data-nav="diary" disabled aria-disabled="true">다이어리</button>
+          </div>
+          <div class="trip-chip" id="trip-summary-text"></div>
+        </header>
+
+        <section class="map-stage card" aria-label="여행 지도 화면">
+          <div class="map-canvas" aria-label="임시 지도 영역">
+            <div id="map" class="mapbox-map"></div>
+            <div class="map-overlay">
+              <div class="recording-badge" id="recording-badge" hidden>
+                <span class="status-pill">기록 중</span>
+                <span id="recording-time">00:00:00</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="map-controls">
+            <button class="record-button" type="button" id="start-recording">기록 시작</button>
+            <button class="record-button record-button--end" type="button" id="end-recording" hidden>기록 종료</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="screen screen--diary" data-screen="diary" hidden aria-labelledby="diary-title">
+        <header class="top-bar">
+          <div class="segment-tabs" aria-label="화면 전환">
+            <button class="segment-button" type="button" data-nav="map">지도</button>
+            <button class="segment-button is-active" type="button" data-nav="diary">다이어리</button>
+          </div>
+          <div class="trip-chip" id="diary-summary-text"></div>
+        </header>
+
+        <section class="diary-shell card">
+          <div class="diary-header">
+            <div>
+              <p class="eyebrow">시간순 기록</p>
+              <h2 id="diary-title">여행 다이어리</h2>
+            </div>
+            <div class="status-pill status-pill--complete">완료</div>
+          </div>
+          <div class="timeline" id="timeline"></div>
+        </section>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" hidden role="status" aria-live="polite">
+      <p>오늘의 여정이 다이어리로 정리되었습니다</p>
+    </div>
+  </body>
+</html>
