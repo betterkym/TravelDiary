@@ -1,0 +1,1 @@
+window.MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || "";
