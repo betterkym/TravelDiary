@@ -1,18 +1,23 @@
-"""거리·시간·정차 지점 계산. (소유: 3번 GPS·경로)
-
-정리된 좌표열로부터 경로 요약(Route)을 만듭니다.
-
-완료 기준: 샘플 좌표에서 경로 요약과 정차 지점 3~5개를 반환.
-"""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from math import atan2, cos, radians, sin, sqrt
+from typing import Protocol, Sequence
 
-from ..models import LocationPoint, Route, Stop
+from ..models import LocationPoint, Photo, Route, Stop
+
+STOP_GAP_SEC = 180
+SAME_PLACE_RADIUS_M = 30.0
 
 
-def _haversine_m(a: LocationPoint, b: LocationPoint) -> float:
-    """두 좌표 사이 거리(m)."""
+class _RoutePoint(Protocol):
+    lat: float
+    lng: float
+    time: datetime
+
+
+def _haversine_m(a: _RoutePoint, b: _RoutePoint) -> float:
+    """Return distance in meters between two GPS points."""
     r = 6_371_000
     dlat = radians(b.lat - a.lat)
     dlng = radians(b.lng - a.lng)
@@ -20,20 +25,71 @@ def _haversine_m(a: LocationPoint, b: LocationPoint) -> float:
     return 2 * r * atan2(sqrt(h), sqrt(1 - h))
 
 
-def build_route(points: list[LocationPoint]) -> Route:
-    """좌표열 -> Route.
+def build_route(points: Sequence[_RoutePoint]) -> Route:
+    """Build a GPS-based route summary from time-ordered points.
 
-    TODO(3번):
-      - 정차 지점 검출(일정 반경 내 오래 머문 구간) -> stops
-      - 필요하면 geocoding 으로 stop 에 place 이름 채우기
-    현재는 총거리/총시간만 계산하고 stops 는 비웁니다.
+    The route follows the photo trail itself:
+    - points are sorted by capture time
+    - total distance is accumulated from consecutive GPS points
+    - stops are recorded when points stay within the same place radius for at
+      least 3 minutes
     """
-    if len(points) < 2:
+    ordered = [p for p in sorted(points, key=_sort_key)]
+    if len(ordered) < 2:
         return Route()
 
-    distance = sum(_haversine_m(points[i], points[i + 1]) for i in range(len(points) - 1))
-    duration = (points[-1].time - points[0].time).total_seconds()
+    distance = 0.0
+    stops: list[Stop] = []
+    cluster_start = ordered[0]
+    cluster_end = ordered[0]
 
-    stops: list[Stop] = []  # TODO(3번): 정차 지점 채우기
+    for prev, curr in zip(ordered, ordered[1:]):
+        segment_distance = _haversine_m(prev, curr)
+        distance += segment_distance
 
+        if segment_distance <= SAME_PLACE_RADIUS_M:
+            cluster_end = curr
+        else:
+            _append_stop_if_needed(stops, cluster_start, cluster_end)
+            cluster_start = curr
+            cluster_end = curr
+
+    _append_stop_if_needed(stops, cluster_start, cluster_end)
+
+    duration = (ordered[-1].time - ordered[0].time).total_seconds()
     return Route(distance_m=int(distance), duration_sec=int(duration), stops=stops)
+
+
+def build_route_from_photos(photos: Sequence[Photo]) -> Route | None:
+    """Build a route from photo EXIF GPS/time metadata.
+
+    Returns ``None`` when there are not enough usable photo points yet.
+    """
+    points = [
+        LocationPoint(lat=float(photo.lat), lng=float(photo.lng), time=photo.taken_at)
+        for photo in photos
+        if photo.taken_at is not None and photo.lat is not None and photo.lng is not None
+    ]
+    if len(points) < 2:
+        return None
+    return build_route(points)
+
+
+def _append_stop_if_needed(stops: list[Stop], start: _RoutePoint, end: _RoutePoint) -> None:
+    """Store a stop only when the same-place cluster lasted 3 minutes or more."""
+    if (end.time - start.time).total_seconds() < STOP_GAP_SEC:
+        return
+
+    stops.append(
+        Stop(
+            lat=float(start.lat),
+            lng=float(start.lng),
+            arrived_at=start.time,
+            left_at=end.time,
+        )
+    )
+
+
+def _sort_key(point: _RoutePoint) -> datetime:
+    """Fallback sort key for malformed points."""
+    return point.time or datetime.max.replace(tzinfo=timezone.utc)

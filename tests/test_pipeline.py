@@ -1,54 +1,92 @@
-"""전체 흐름 스모크 테스트. (소유: 2번 백엔드·통합)
-
-하위 모듈이 stub 이어도 여행 생성 -> 좌표 -> generate -> diary 가
-공통 데이터 계약(Diary) 형태로 끝까지 도는지 확인합니다.
-
-실행: pytest
-"""
+"""End-to-end pipeline smoke tests."""
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from backend import storage
 from backend.app import app
+from backend.models import Photo
 
 client = TestClient(app)
 
 
 def test_full_flow_returns_diary_shape():
-    # 1) 여행 생성
-    r = client.post("/api/trips", json={
-        "title": "테스트 여행",
-        "start_date": "2026-07-15",
-        "region": "서울",
-    })
+    r = client.post(
+        "/api/trips",
+        json={
+            "title": "테스트 여행",
+            "start_date": "2026-07-15",
+            "region": "서울",
+        },
+    )
     assert r.status_code == 200
     trip_id = r.json()["trip_id"]
 
-    # 2) 좌표 전송
     now = datetime.now(timezone.utc)
-    r = client.post(f"/api/trips/{trip_id}/locations", json={
-        "points": [
-            {"lat": 37.0, "lng": 127.0, "time": now.isoformat()},
-            {"lat": 37.001, "lng": 127.001, "time": (now + timedelta(minutes=30)).isoformat()},
-        ]
-    })
+    r = client.post(
+        f"/api/trips/{trip_id}/locations",
+        json={
+            "points": [
+                {"lat": 37.0, "lng": 127.0, "time": now.isoformat()},
+                {"lat": 37.001, "lng": 127.001, "time": (now + timedelta(minutes=30)).isoformat()},
+            ]
+        },
+    )
     assert r.status_code == 200
 
-    # 3) 생성
     r = client.post(f"/api/trips/{trip_id}/generate")
     assert r.status_code == 200
     diary = r.json()
 
-    # 공통 데이터 계약 키 확인
     assert diary["trip_id"] == trip_id
     assert "route" in diary and "distance_m" in diary["route"]
     assert "selected_photos" in diary
     assert "timeline" in diary
 
-    # 4) 재조회
     r = client.get(f"/api/trips/{trip_id}/diary")
     assert r.status_code == 200
     assert r.json()["trip_id"] == trip_id
+
+
+def test_generate_prefers_photo_gps_over_manual_locations():
+    r = client.post(
+        "/api/trips",
+        json={
+            "title": "사진 우선",
+            "start_date": "2026-07-15",
+            "region": "서울",
+        },
+    )
+    assert r.status_code == 200
+    trip_id = r.json()["trip_id"]
+
+    now = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    client.post(
+        f"/api/trips/{trip_id}/locations",
+        json={
+            "points": [
+                {"lat": 37.0, "lng": 127.0, "time": now.isoformat()},
+                {"lat": 38.0, "lng": 128.0, "time": (now + timedelta(hours=1)).isoformat()},
+            ]
+        },
+    )
+
+    storage.add_photos(
+        trip_id,
+        [
+            Photo(photo_id="p1", filename="p1.jpg", taken_at=now, lat=37.0, lng=127.0),
+            Photo(photo_id="p2", filename="p2.jpg", taken_at=now + timedelta(minutes=2), lat=37.001, lng=127.001),
+            Photo(photo_id="p3", filename="p3.jpg", taken_at=now + timedelta(minutes=6), lat=37.001, lng=127.001),
+        ],
+    )
+
+    r = client.post(f"/api/trips/{trip_id}/generate")
+    assert r.status_code == 200
+    diary = r.json()
+
+    assert diary["route"]["duration_sec"] == 360
+    assert diary["route"]["distance_m"] < 1000
+    assert len(diary["route"]["stops"]) == 1
 
 
 def test_unknown_trip_404():
