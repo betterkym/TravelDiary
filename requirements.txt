@@ -10,8 +10,10 @@ python-multipart==0.0.9   # 사진 다중 업로드(멀티파트) 처리
 python-dotenv==1.0.1
 
 # 사진 분석·선별 (4번)
-Pillow==10.3.0            # EXIF 추출, 이미지 정규화
-ImageHash==4.3.1          # 유사사진 perceptual hash
+Pillow>=10.3.0           # EXIF 추출, 품질 평가, 유사사진 해시 (numpy/OpenCV 불필요)
+# 유사사진은 Pillow 만으로 average hash 를 직접 계산합니다(services/dedupe.py).
+# 더 정교한 phash 가 필요하면 아래를 켜서 교체하세요.
+# ImageHash==4.3.1
 
 # 테스트
 pytest==8.2.2

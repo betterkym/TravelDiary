@@ -213,6 +213,7 @@ GET  /api/trips/{trip_id}/diary
 ```json
 {
   "trip_id": "trip_001",
+  "title": "서울 여행 기록",
   "route": {
     "distance_m": 3120,
     "duration_sec": 7200,

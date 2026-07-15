@@ -31,6 +31,11 @@ def get_locations(trip_id: str) -> list[LocationPoint]:
     return _trips[trip_id]["locations"]
 
 
+def get_meta(trip_id: str) -> dict:
+    """여행 생성 시 입력한 title/start_date/region 등."""
+    return _trips.get(trip_id, {}).get("meta", {})
+
+
 def add_photos(trip_id: str, photos: list[Photo]) -> None:
     _trips[trip_id]["photos"].extend(photos)
 

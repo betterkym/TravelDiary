@@ -32,12 +32,15 @@ def generate(trip_id: str) -> Diary:
     photos = dedupe.group(photos, paths)
     selected = selector.select(photos)
 
-    # 3) 다이어리 (5번): 매칭 -> 문구
+    # 3) 다이어리 (5번): 매칭 -> 문구 -> 제목
     entries = timeline.build(trip_route, selected, photos)
     entries = diary.annotate(entries)
+    region = storage.get_meta(trip_id).get("region", "")
+    title = diary.make_title(entries, region=region)
 
     result = Diary(
         trip_id=trip_id,
+        title=title,
         route=trip_route,
         selected_photos=selected,
         timeline=entries,

@@ -87,6 +87,7 @@ class TimelineEntry(BaseModel):
 class Diary(BaseModel):
     """GET /api/trips/{trip_id}/diary 응답 (공통 데이터 계약)."""
     trip_id: str
+    title: str = ""
     route: Route = Field(default_factory=Route)
     selected_photos: list[SelectedPhoto] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
