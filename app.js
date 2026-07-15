@@ -2,8 +2,10 @@
 const STORAGE_KEY = 'travel-diary.trips.v1';
 const PHOTO_SPOT_RADIUS_M = 100;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
-const PHOTO_SPOT_MIN_COUNT = 3;
+const PHOTO_SPOT_MIN_COUNT = 5;
 const PHOTO_SPOT_GAP_MS = 10 * 60 * 1000;
+const PHOTO_LOCATION_MATCH_WINDOW_MS = 3 * 60 * 1000;
+const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
 const FOOTPRINT_MIN_GAP_MS = 8000;
 
@@ -568,17 +570,51 @@ function parseGpsCoordinate(ref, values, lonRef) {
   return result;
 }
 
-function parsePhotoFile(file) {
-  return Promise.all([file.arrayBuffer(), fileToDataUrl(file)]).then(([buffer, dataUrl]) => {
-    const exif = parseExifBuffer(buffer);
-    return {
-      id: crypto.randomUUID ? crypto.randomUUID() : `photo_${Math.random().toString(16).slice(2)}`,
-      fileName: file.name,
-      dataUrl,
-      takenAt: exif.takenAt || new Date(file.lastModified || Date.now()),
-      lat: exif.lat ?? null,
-      lng: exif.lng ?? null,
-    };
+async function parsePhotoFile(file) {
+  const [buffer, dataUrl] = await Promise.all([file.arrayBuffer(), fileToPreviewDataUrl(file)]);
+  const exif = parseExifBuffer(buffer);
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `photo_${Math.random().toString(16).slice(2)}`,
+    fileName: file.name,
+    dataUrl,
+    takenAt: exif.takenAt || new Date(file.lastModified || Date.now()),
+    lat: exif.lat ?? null,
+    lng: exif.lng ?? null,
+  };
+}
+
+async function fileToPreviewDataUrl(file, maxDimension = 1600, quality = 0.82) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(objectUrl);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) return await fileToDataUrl(file);
+
+    const ratio = Math.min(1, maxDimension / Math.max(width, height));
+    const targetWidth = Math.max(1, Math.round(width * ratio));
+    const targetHeight = Math.max(1, Math.round(height * ratio));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return await fileToDataUrl(file);
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return await fileToDataUrl(file);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to load image'));
+    image.src = src;
   });
 }
 
@@ -603,6 +639,15 @@ function findNearestLocationSample(targetTime) {
     }
   }
   return best;
+}
+
+function findStableLocationSample(targetTime) {
+  const nearest = findNearestLocationSample(targetTime);
+  if (!nearest) return null;
+  const gap = Math.abs(nearest.timestamp - targetTime.getTime());
+  if (gap > PHOTO_LOCATION_MATCH_WINDOW_MS) return null;
+  if (typeof nearest.lng !== 'number' || typeof nearest.lat !== 'number') return null;
+  return nearest;
 }
 
 function centerMapOn(lngLat, zoom = 15.5) {
@@ -951,27 +996,34 @@ function endRecording() {
 function buildClusters(photos) {
   const groups = [];
   for (const photo of photos) {
-    const lastGroup = groups[groups.length - 1];
     const photoPoint = [photo.lng, photo.lat];
-    const photoTime = photo.takenAt.getTime();
-    if (lastGroup) {
-      const gap = photoTime - lastGroup.lastTakenAt;
-      const distance = distanceMeters(lastGroup.center, photoPoint);
-      if (gap <= PHOTO_SPOT_GAP_MS && distance <= PHOTO_SPOT_RADIUS_M) {
-        lastGroup.photos.push(photo);
-        lastGroup.lastTakenAt = photoTime;
-        lastGroup.center = [
-          (lastGroup.center[0] * (lastGroup.photos.length - 1) + photo.lng) / lastGroup.photos.length,
-          (lastGroup.center[1] * (lastGroup.photos.length - 1) + photo.lat) / lastGroup.photos.length,
-        ];
-        continue;
+    let matchedGroup = null;
+
+    for (let i = groups.length - 1; i >= 0; i -= 1) {
+      const group = groups[i];
+      const distance = distanceMeters(group.anchorPoint, photoPoint);
+      if (distance <= PHOTO_SPOT_RADIUS_M) {
+        matchedGroup = group;
+        break;
       }
     }
+
+    if (matchedGroup) {
+      matchedGroup.photos.push(photo);
+      matchedGroup.lastTakenAt = photo.takenAt.getTime();
+      matchedGroup.center = [
+        (matchedGroup.center[0] * (matchedGroup.photos.length - 1) + photo.lng) / matchedGroup.photos.length,
+        (matchedGroup.center[1] * (matchedGroup.photos.length - 1) + photo.lat) / matchedGroup.photos.length,
+      ];
+      continue;
+    }
+
     groups.push({
       photos: [photo],
       center: photoPoint,
-      firstTakenAt: photoTime,
-      lastTakenAt: photoTime,
+      anchorPoint: photoPoint,
+      firstTakenAt: photo.takenAt.getTime(),
+      lastTakenAt: photo.takenAt.getTime(),
     });
   }
   return groups;
@@ -1012,11 +1064,19 @@ function formatDateTimeLabel(date) {
 }
 
 async function generateDiaryFromFiles(files) {
-  const parsed = await Promise.all(files.map(parsePhotoFile));
+  const parsed = [];
+  for (const file of files) {
+    try {
+      parsed.push(await parsePhotoFile(file));
+    } catch (error) {
+      console.error('Failed to read photo file:', file?.name, error);
+    }
+  }
+
   const photoData = parsed
     .map((photo) => {
       if ((photo.lat == null || photo.lng == null) && photo.takenAt) {
-        const nearest = findNearestLocationSample(photo.takenAt);
+        const nearest = findStableLocationSample(photo.takenAt);
         if (nearest) {
           photo.lat = nearest.lat;
           photo.lng = nearest.lng;
@@ -1033,12 +1093,13 @@ async function generateDiaryFromFiles(files) {
 
   photoData.sort((a, b) => a.takenAt - b.takenAt);
   const clusters = buildClusters(photoData);
-  const qualifying = clusters.filter((cluster) => {
-    const duration = cluster.lastTakenAt - cluster.firstTakenAt;
-    return cluster.photos.length >= PHOTO_SPOT_MIN_COUNT && duration >= PHOTO_SPOT_MIN_DURATION_MS;
-  });
+  const qualifying = clusters.filter((cluster) => cluster.photos.length >= PHOTO_SPOT_MIN_COUNT);
 
-  const targetClusters = qualifying.length ? qualifying : clusters.slice(0, 1);
+  const targetClusters = qualifying;
+  if (!targetClusters.length) {
+    showToast('조건을 만족하는 주요 스팟이 아직 없어요.');
+    return;
+  }
   const entries = [];
 
   for (let i = 0; i < targetClusters.length; i += 1) {
@@ -1049,7 +1110,7 @@ async function generateDiaryFromFiles(files) {
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.map((photo) => photo.dataUrl);
+    const photoUrls = cluster.photos.slice(0, 3).map((photo) => photo.dataUrl);
     entries.push({
       time: timeLabel,
       place,
@@ -1062,6 +1123,12 @@ async function generateDiaryFromFiles(files) {
       durationMinutes,
     });
   }
+
+  entries.sort((a, b) => {
+    const left = a.timestamp instanceof Date ? a.timestamp.getTime() : new Date(a.timestamp).getTime();
+    const right = b.timestamp instanceof Date ? b.timestamp.getTime() : new Date(b.timestamp).getTime();
+    return left - right;
+  });
 
   state.generatedDiary = entries;
   state.diaryUnlocked = true;
