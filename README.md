@@ -330,6 +330,14 @@ python -m http.server 8000
 http://localhost:8000
 ```
 
+백엔드 API는 별도 터미널에서 다음으로 실행합니다.
+
+```bash
+uvicorn backend.app:app --reload --port 8001
+```
+
+프런트는 `config.local.js`의 `window.API_BASE_URL`을 `http://localhost:8001`로 두면 됩니다.
+
 ### Mapbox 토큰
 
 현재 `app.js`는 실행 시 다음 전역값을 읽습니다.
