@@ -1,4 +1,5 @@
 const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
+const STORAGE_KEY = 'travel-diary.trips.v1';
 const PHOTO_SPOT_RADIUS_M = 100;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 3;
@@ -18,11 +19,18 @@ const state = {
   map: null,
   currentMarker: null,
   footprintMarkers: [],
+  routeLine: null,
   locationSamples: [],
   lastFootprintAt: 0,
   lastFootprintLngLat: null,
   generatedDiary: null,
   photoUrls: [],
+  savedTrips: [],
+  selectedTripId: null,
+  activeTripId: null,
+  activeTrip: null,
+  calendarOpen: false,
+  calendarMonth: null,
   trip: {
     title: '탈린의 겨울 산책',
     date: '2026-07-15',
@@ -67,6 +75,8 @@ const elements = {
   tripRegion: document.getElementById('trip-region'),
   tripSummaryText: document.getElementById('trip-summary-text'),
   diarySummaryText: document.getElementById('diary-summary-text'),
+  calendarToggle: document.getElementById('calendar-toggle'),
+  tripHistory: document.getElementById('trip-history'),
   mapCanvas: document.getElementById('map'),
   recordingBadge: document.getElementById('recording-badge'),
   recordingTime: document.getElementById('recording-time'),
@@ -77,6 +87,12 @@ const elements = {
   endRecording: document.getElementById('end-recording'),
   navButtons: Array.from(document.querySelectorAll('[data-nav]')),
   timeline: document.getElementById('timeline'),
+  calendarModal: document.getElementById('calendar-modal'),
+  calendarGrid: document.getElementById('calendar-grid'),
+  calendarMonthLabel: document.getElementById('calendar-month-label'),
+  calendarPrev: document.getElementById('calendar-prev'),
+  calendarNext: document.getElementById('calendar-next'),
+  calendarClose: document.getElementById('calendar-close'),
   toast: document.getElementById('toast'),
 };
 
@@ -155,6 +171,273 @@ function distanceMeters(a, b) {
     sinLat * sinLat +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * sinLng * sinLng;
   return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function normalizeDateKey(dateValue) {
+  if (!dateValue) return '';
+  if (dateValue instanceof Date && !Number.isNaN(dateValue.getTime())) {
+    const year = dateValue.getFullYear();
+    const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+    const day = String(dateValue.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const text = String(dateValue).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function createLocalDate(year, monthIndex, day = 1) {
+  return new Date(year, monthIndex, day);
+}
+
+function formatCalendarMonth(date) {
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+  }).format(date);
+}
+
+function formatCalendarDay(date) {
+  return String(date.getDate());
+}
+
+function dedupeTripsByDate(trips) {
+  const seen = new Set();
+  const deduped = [];
+  trips.forEach((trip) => {
+    const key = normalizeDateKey(trip.date);
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(trip);
+  });
+  return deduped;
+}
+
+function getTripByDateKey(dateKey) {
+  return state.savedTrips.find((trip) => normalizeDateKey(trip.date) === dateKey) || null;
+}
+
+function getCalendarMonthDate() {
+  if (state.calendarMonth instanceof Date && !Number.isNaN(state.calendarMonth.getTime())) {
+    return new Date(state.calendarMonth.getFullYear(), state.calendarMonth.getMonth(), 1);
+  }
+  const selectedTrip = getSelectedTrip();
+  if (selectedTrip?.date) {
+    const parsed = new Date(`${normalizeDateKey(selectedTrip.date)}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+    }
+  }
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+function setCalendarMonth(date) {
+  state.calendarMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+  renderCalendar();
+}
+
+function openCalendar() {
+  const selectedTrip = getSelectedTrip();
+  const anchor = selectedTrip?.date
+    ? new Date(`${normalizeDateKey(selectedTrip.date)}T00:00:00`)
+    : new Date();
+  state.calendarMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  state.calendarOpen = true;
+  if (elements.calendarModal) {
+    elements.calendarModal.hidden = false;
+  }
+  renderCalendar();
+}
+
+function closeCalendar() {
+  state.calendarOpen = false;
+  if (elements.calendarModal) {
+    elements.calendarModal.hidden = true;
+  }
+}
+
+function moveCalendarMonth(delta) {
+  const current = getCalendarMonthDate();
+  setCalendarMonth(new Date(current.getFullYear(), current.getMonth() + delta, 1));
+}
+
+function renderCalendar() {
+  if (!elements.calendarGrid || !elements.calendarMonthLabel) return;
+  const monthDate = getCalendarMonthDate();
+  const year = monthDate.getFullYear();
+  const monthIndex = monthDate.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const selectedDateKey = getSelectedTrip() ? normalizeDateKey(getSelectedTrip().date) : '';
+  const tripMap = new Map(state.savedTrips.map((trip) => [normalizeDateKey(trip.date), trip]));
+
+  elements.calendarMonthLabel.textContent = formatCalendarMonth(monthDate);
+  elements.calendarGrid.innerHTML = '';
+
+  for (let i = 0; i < startOffset; i += 1) {
+    const empty = document.createElement('div');
+    empty.className = 'calendar-day is-empty';
+    elements.calendarGrid.appendChild(empty);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dayDate = createLocalDate(year, monthIndex, day);
+    const dateKey = normalizeDateKey(dayDate);
+    const trip = tripMap.get(dateKey);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-day';
+    if (trip) button.classList.add('has-trip');
+    if (dateKey === selectedDateKey) button.classList.add('is-selected');
+    button.innerHTML = `
+      <span class="calendar-day-number">${formatCalendarDay(dayDate)}</span>
+      <span class="calendar-day-label">${trip ? trip.title : '기록 없음'}</span>
+    `;
+    if (trip) {
+      button.addEventListener('click', () => {
+        pickTrip(trip.id);
+        renderTripOnMap(trip);
+        closeCalendar();
+      });
+    } else {
+      button.disabled = true;
+      button.classList.add('is-muted');
+    }
+    elements.calendarGrid.appendChild(button);
+  }
+}
+
+function readSavedTrips() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((trip) => ({
+      id: trip.id,
+      title: trip.title || '여행',
+      date: trip.date || '',
+      region: trip.region || '미정 지역',
+      createdAt: trip.createdAt || new Date().toISOString(),
+      status: trip.status || 'draft',
+      recording: {
+        startedAt: trip.recording?.startedAt ?? null,
+        endedAt: trip.recording?.endedAt ?? null,
+        elapsed: trip.recording?.elapsed ?? 0,
+        samples: Array.isArray(trip.recording?.samples) ? trip.recording.samples : [],
+        footprints: Array.isArray(trip.recording?.footprints) ? trip.recording.footprints : [],
+      },
+      diary: Array.isArray(trip.diary) ? trip.diary : [],
+      photos: Array.isArray(trip.photos) ? trip.photos : [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function writeSavedTrips() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.savedTrips));
+  } catch {
+    // Ignore storage quota errors in the MVP.
+  }
+}
+
+function createTripRecord(trip) {
+  return {
+    id: trip.id,
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
+    createdAt: trip.createdAt,
+    recording: {
+      startedAt: trip.recording?.startedAt ?? null,
+      endedAt: trip.recording?.endedAt ?? null,
+      elapsed: trip.recording?.elapsed ?? 0,
+      samples: trip.recording?.samples ?? [],
+      footprints: trip.recording?.footprints ?? [],
+    },
+    diary: trip.diary ?? [],
+    photos: trip.photos ?? [],
+    status: trip.status ?? 'draft',
+  };
+}
+
+function upsertSavedTrip(trip) {
+  const record = createTripRecord(trip);
+  const dateKey = normalizeDateKey(record.date);
+  const index = state.savedTrips.findIndex(
+    (item) => item.id === record.id || normalizeDateKey(item.date) === dateKey,
+  );
+  if (index >= 0) {
+    state.savedTrips[index] = record;
+  } else {
+    state.savedTrips.unshift(record);
+  }
+  state.savedTrips = dedupeTripsByDate(state.savedTrips);
+  writeSavedTrips();
+  return record;
+}
+
+function getSelectedTrip() {
+  return state.savedTrips.find((trip) => trip.id === state.selectedTripId) || state.savedTrips[0] || null;
+}
+
+function getTripMapState(trip) {
+  if (!trip) return 'before';
+  const isActiveTrip = trip.id === state.activeTripId;
+  if (trip.status === 'recording' && isActiveTrip) return 'recording';
+  if (trip.status === 'recorded' && isActiveTrip && !(trip.diary && trip.diary.length)) return 'after';
+  return 'before';
+}
+
+function syncSelectedTripView() {
+  const trip = getSelectedTrip();
+  if (!trip) {
+    state.trip = {
+      title: elements.tripTitle.value.trim() || '새 여행',
+      date: elements.tripDate.value,
+      region: elements.tripRegion.value.trim() || '미정 지역',
+    };
+    state.generatedDiary = null;
+    state.diaryUnlocked = false;
+    updateTripTexts();
+    renderTripHistory();
+    renderTimeline(state.sampleTimeline);
+    updateNavButtons();
+    setMapState('before');
+    return null;
+  }
+
+  state.trip = {
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
+  };
+  state.generatedDiary = trip.diary && trip.diary.length ? trip.diary : null;
+  state.diaryUnlocked = Boolean(state.generatedDiary);
+  state.locationSamples = trip.recording?.samples ?? [];
+  updateTripTexts();
+  renderTripHistory();
+  renderTimeline(state.generatedDiary || state.sampleTimeline);
+  updateNavButtons();
+  setMapState(getTripMapState(trip));
+  return trip;
+}
+
+function pickTrip(tripId) {
+  state.selectedTripId = tripId;
+  const trip = syncSelectedTripView();
+  if (!trip) return;
+  if (state.screen === 'map') renderTripOnMap(trip);
 }
 
 function parseExifDate(dateString) {
@@ -285,17 +568,25 @@ function parseGpsCoordinate(ref, values, lonRef) {
 }
 
 function parsePhotoFile(file) {
-  return file.arrayBuffer().then((buffer) => {
+  return Promise.all([file.arrayBuffer(), fileToDataUrl(file)]).then(([buffer, dataUrl]) => {
     const exif = parseExifBuffer(buffer);
     return {
       id: crypto.randomUUID ? crypto.randomUUID() : `photo_${Math.random().toString(16).slice(2)}`,
-      file,
-      url: URL.createObjectURL(file),
-      name: file.name,
+      fileName: file.name,
+      dataUrl,
       takenAt: exif.takenAt || new Date(file.lastModified || Date.now()),
       lat: exif.lat ?? null,
       lng: exif.lng ?? null,
     };
+  });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -319,6 +610,88 @@ function centerMapOn(lngLat, zoom = 15.5) {
     center: lngLat,
     zoom,
     duration: 700,
+  });
+}
+
+function ensureRouteLayer() {
+  if (!state.map || state.map.getSource('trip-route-source')) return;
+  state.map.addSource('trip-route-source', {
+    type: 'geojson',
+    data: {
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [],
+      },
+      properties: {},
+    },
+  });
+  state.map.addLayer({
+    id: 'trip-route-line',
+    type: 'line',
+    source: 'trip-route-source',
+    paint: {
+      'line-color': '#c86f4f',
+      'line-width': 4,
+      'line-opacity': 0.92,
+    },
+  });
+}
+
+function setRouteLine(coordinates) {
+  if (!state.map || !state.map.getSource('trip-route-source')) return;
+  state.map.getSource('trip-route-source').setData({
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates,
+    },
+    properties: {},
+  });
+}
+
+function renderTripOnMap(trip) {
+  if (!state.map) return;
+  clearLiveMarkers();
+  ensureRouteLayer();
+
+  const samples = trip?.recording?.samples || [];
+  const coordinates = samples.map((sample) => [sample.lng, sample.lat]);
+  setRouteLine(coordinates);
+
+  (trip?.recording?.footprints || []).forEach((point) => {
+    addFootprint([point.lng, point.lat]);
+  });
+
+  const last = samples[samples.length - 1];
+  if (last) {
+    ensureCurrentMarker([last.lng, last.lat]);
+    centerMapOn([last.lng, last.lat], 15.5);
+  }
+}
+
+function renderTripHistory() {
+  if (!elements.tripHistory) return;
+  if (!state.savedTrips.length) {
+    elements.tripHistory.innerHTML = '<span class="trip-chip">저장된 여행이 아직 없어요</span>';
+    return;
+  }
+
+  elements.tripHistory.innerHTML = state.savedTrips
+    .map((trip) => {
+      const active = trip.id === state.selectedTripId;
+      return `
+        <button class="trip-history-button ${active ? 'is-active' : ''}" type="button" data-trip-id="${trip.id}">
+          ${trip.date} · ${trip.title}
+        </button>
+      `;
+    })
+    .join('');
+
+  elements.tripHistory.querySelectorAll('[data-trip-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      pickTrip(button.dataset.tripId);
+    });
   });
 }
 
@@ -356,6 +729,13 @@ function initMapIfNeeded() {
     zoom: 2.5,
     attributionControl: false,
   });
+  state.map.on('load', () => {
+    ensureRouteLayer();
+    const trip = getSelectedTrip();
+    if (trip) {
+      renderTripOnMap(trip);
+    }
+  });
 }
 
 function setScreen(screen) {
@@ -376,10 +756,16 @@ function setScreen(screen) {
 
 function setMapState(mapState) {
   state.mapState = mapState;
+  const isActiveTrip = state.selectedTripId && state.selectedTripId === state.activeTripId;
   elements.recordingBadge.hidden = mapState !== 'recording';
-  elements.photoImportPanel.hidden = mapState !== 'after';
-  elements.startRecording.hidden = mapState !== 'before';
+  elements.photoImportPanel.hidden = !(mapState === 'after' && isActiveTrip);
+  elements.startRecording.hidden = mapState !== 'before' || !isActiveTrip;
   elements.endRecording.hidden = mapState !== 'recording';
+  if (!isActiveTrip) {
+    elements.startRecording.hidden = true;
+    elements.endRecording.hidden = true;
+    elements.photoImportPanel.hidden = true;
+  }
 }
 
 function updateRecordingTimer() {
@@ -421,6 +807,9 @@ function clearLiveMarkers() {
   }
   state.lastFootprintLngLat = null;
   state.lastFootprintAt = 0;
+  if (state.map && state.map.getSource('trip-route-source')) {
+    setRouteLine([]);
+  }
 }
 
 function addFootprint(lngLat) {
@@ -454,6 +843,15 @@ function handlePosition(position) {
     lat: lngLat[1],
     timestamp,
   });
+  if (state.activeTrip) {
+    state.activeTrip.recording.samples.push({
+      lng: lngLat[0],
+      lat: lngLat[1],
+      timestamp,
+    });
+    setRouteLine(state.activeTrip.recording.samples.map((sample) => [sample.lng, sample.lat]));
+    upsertSavedTrip(state.activeTrip);
+  }
 
   ensureCurrentMarker(lngLat);
   centerMapOn(lngLat);
@@ -466,6 +864,14 @@ function handlePosition(position) {
 
   if (shouldDropFootprint) {
     addFootprint(lngLat);
+    if (state.activeTrip) {
+      state.activeTrip.recording.footprints.push({
+        lng: lngLat[0],
+        lat: lngLat[1],
+        timestamp,
+      });
+      upsertSavedTrip(state.activeTrip);
+    }
     state.lastFootprintLngLat = lngLat;
     state.lastFootprintAt = timestamp;
   }
@@ -512,6 +918,11 @@ function startRecording() {
   state.recordingStartedAt = Date.now();
   state.recordingBonusSeconds = 0;
   state.recordingElapsed = 0;
+  if (state.activeTrip) {
+    state.activeTrip.recording.startedAt = new Date(state.recordingStartedAt).toISOString();
+    state.activeTrip.status = 'recording';
+    upsertSavedTrip(state.activeTrip);
+  }
   updateRecordingTimer();
   setMapState('recording');
 
@@ -528,7 +939,16 @@ function endRecording() {
   stopTracking();
   updateRecordingTimer();
   setMapState('after');
-  showToast('여행 사진 불러오기 버튼을 눌러 사진첩에서 사진을 선택해 주세요');
+  if (state.activeTrip) {
+    state.activeTrip.recording.endedAt = new Date().toISOString();
+    state.activeTrip.recording.elapsed = state.recordingElapsed;
+    state.activeTrip.status = 'recorded';
+    upsertSavedTrip(state.activeTrip);
+  }
+  state.diaryUnlocked = false;
+  updateNavButtons();
+  showToast('오늘의 여정이 사진첩과 연결되었습니다. 사진 불러오기 버튼을 눌러 주세요.');
+  return;
 }
 
 function buildClusters(photos) {
@@ -598,7 +1018,7 @@ async function generateDiaryFromFiles(files) {
   const parsed = await Promise.all(files.map(parsePhotoFile));
   const photoData = parsed
     .map((photo) => {
-      if ((!photo.lat || !photo.lng) && photo.takenAt) {
+      if ((photo.lat == null || photo.lng == null) && photo.takenAt) {
         const nearest = findNearestLocationSample(photo.takenAt);
         if (nearest) {
           photo.lat = nearest.lat;
@@ -613,9 +1033,6 @@ async function generateDiaryFromFiles(files) {
     showToast('촬영 시간과 위치 정보를 읽을 수 있는 사진이 필요해요.');
     return;
   }
-
-  cleanupGeneratedPhotoUrls();
-  state.photoUrls = photoData.map((photo) => photo.url);
 
   photoData.sort((a, b) => a.takenAt - b.takenAt);
   const clusters = buildClusters(photoData);
@@ -635,7 +1052,7 @@ async function generateDiaryFromFiles(files) {
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.map((photo) => photo.url);
+    const photoUrls = cluster.photos.map((photo) => photo.dataUrl);
     entries.push({
       time: timeLabel,
       place,
@@ -651,7 +1068,21 @@ async function generateDiaryFromFiles(files) {
 
   state.generatedDiary = entries;
   state.diaryUnlocked = true;
+  if (state.activeTrip) {
+    state.activeTrip.status = 'completed';
+    state.activeTrip.diary = entries;
+    state.activeTrip.photos = photoData.map((photo) => ({
+      id: photo.id,
+      fileName: photo.fileName,
+      dataUrl: photo.dataUrl,
+      takenAt: photo.takenAt.toISOString(),
+      lat: photo.lat,
+      lng: photo.lng,
+    }));
+    upsertSavedTrip(state.activeTrip);
+  }
   updateNavButtons();
+  renderTripHistory();
   renderTimeline(entries);
   setScreen('diary');
   showToast('오늘의 여정이 다이어리로 정리되었습니다');
@@ -713,12 +1144,34 @@ function syncCreateFields() {
 function createTrip() {
   const nextTitle = elements.tripTitle.value.trim();
   const nextRegion = elements.tripRegion.value.trim();
+  const nextDate = elements.tripDate.value;
+  const existingSameDay = state.savedTrips.find((trip) => normalizeDateKey(trip.date) === normalizeDateKey(nextDate));
   cleanupGeneratedPhotoUrls();
   stopTracking();
-  state.trip = {
+  const trip = {
+    id: existingSameDay?.id || (crypto.randomUUID ? crypto.randomUUID() : `trip_${Math.random().toString(16).slice(2)}`),
     title: nextTitle || '새 여행',
-    date: elements.tripDate.value,
+    date: nextDate,
     region: nextRegion || '미정 지역',
+    createdAt: new Date().toISOString(),
+    status: 'recording',
+    recording: {
+      startedAt: null,
+      endedAt: null,
+      elapsed: 0,
+      samples: [],
+      footprints: [],
+    },
+    diary: [],
+    photos: [],
+  };
+  state.activeTripId = trip.id;
+  state.activeTrip = trip;
+  state.selectedTripId = trip.id;
+  state.trip = {
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
   };
   state.generatedDiary = null;
   state.diaryUnlocked = false;
@@ -728,28 +1181,43 @@ function createTrip() {
   state.recordingBonusSeconds = 0;
   clearLiveMarkers();
   updateTripTexts();
+  upsertSavedTrip(trip);
+  renderTripHistory();
   renderTimeline();
   setScreen('map');
   setMapState('before');
+  renderTripOnMap(trip);
 }
 
 function handleNav(target) {
   if (target === 'diary' && !state.diaryUnlocked) return;
+  const trip = target === 'map' || target === 'diary' ? syncSelectedTripView() : null;
+  closeCalendar();
   setScreen(target);
   if (target === 'map') {
-    setMapState(state.mapState);
+    if (trip) renderTripOnMap(trip);
+  }
+  if (target === 'diary') {
+    renderTimeline(state.generatedDiary || state.sampleTimeline);
   }
 }
 
 function cleanupGeneratedPhotoUrls() {
-  state.photoUrls.forEach((url) => URL.revokeObjectURL(url));
   state.photoUrls = [];
 }
 
 function bootstrap() {
+  const loadedTrips = readSavedTrips();
+  state.savedTrips = dedupeTripsByDate(loadedTrips);
+  if (loadedTrips.length !== state.savedTrips.length) {
+    writeSavedTrips();
+  }
+  state.selectedTripId = state.savedTrips[0]?.id || null;
   syncCreateFields();
-  updateTripTexts();
-  renderTimeline();
+  syncSelectedTripView();
+  if (!state.savedTrips.length) {
+    renderTimeline(state.sampleTimeline);
+  }
   setScreen('create');
   setMapState('before');
   updateRecordingTimer();
@@ -764,6 +1232,21 @@ function bootstrap() {
   elements.photoImportButton.addEventListener('click', () => {
     elements.photoInput.value = '';
     elements.photoInput.click();
+  });
+  if (elements.calendarToggle) {
+    elements.calendarToggle.addEventListener('click', openCalendar);
+  }
+  if (elements.calendarClose) {
+    elements.calendarClose.addEventListener('click', closeCalendar);
+  }
+  if (elements.calendarPrev) {
+    elements.calendarPrev.addEventListener('click', () => moveCalendarMonth(-1));
+  }
+  if (elements.calendarNext) {
+    elements.calendarNext.addEventListener('click', () => moveCalendarMonth(1));
+  }
+  elements.calendarModal?.querySelectorAll('[data-calendar-close]').forEach((button) => {
+    button.addEventListener('click', closeCalendar);
   });
   elements.photoInput.addEventListener('change', async () => {
     const files = Array.from(elements.photoInput.files || []).filter((file) => file.type.startsWith('image/'));
