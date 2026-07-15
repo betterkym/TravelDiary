@@ -1,0 +1,25 @@
+# 환경변수 / 비밀값
+.env
+.env.local
+*.key
+
+# 사용자 데이터 (실제 사진/위치기록은 커밋 금지)
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
+*.log

@@ -1,0 +1,19 @@
+{
+  "trip_id": "trip_001",
+  "route": {
+    "distance_m": 3120,
+    "duration_sec": 7200,
+    "stops": []
+  },
+  "selected_photos": [],
+  "timeline": [
+    {
+      "time": "2026-07-15T10:30:00+09:00",
+      "place": "장소명",
+      "note": "짧은 여행 기록",
+      "photo_url": "/outputs/photo_01.jpg",
+      "lat": 37.0,
+      "lng": 127.0
+    }
+  ]
+}

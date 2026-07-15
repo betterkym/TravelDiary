@@ -1,0 +1,39 @@
+# 파일별 소유자. 해당 파일이 바뀐 PR에는 GitHub이 자동으로 소유자에게 리뷰를 요청합니다.
+# 형식: <경로 패턴>  <@GitHub계정>
+# 아래로 갈수록 우선순위가 높습니다(더 구체적인 규칙이 이깁니다).
+
+# 기본: 공용 파일과 백엔드 뼈대는 2번(백엔드·통합)
+*                       @betterkym
+
+# 1. UI·프런트 — 윤현정
+/index.html             @keepwatering
+/styles.css             @keepwatering
+/app.js                 @keepwatering
+
+# 2. 백엔드·통합 — 김나은 (공통 계약/서버/파이프라인/공용 파일)
+/backend/app.py         @betterkym
+/backend/models.py      @betterkym
+/backend/config.py      @betterkym
+/backend/storage.py     @betterkym
+/backend/pipeline.py    @betterkym
+/backend/fixtures/      @betterkym
+/requirements.txt       @betterkym
+/.env.example           @betterkym
+/.gitignore             @betterkym
+/README.md              @betterkym
+/.github/CODEOWNERS     @betterkym
+
+# 3. GPS·경로 — 정가희
+/backend/services/location.py   @jghkor-ctrl
+/backend/services/route.py      @jghkor-ctrl
+
+# 4. 사진 분석·선별 — 이주현
+/backend/services/exif.py       @jhlee0219
+/backend/services/quality.py    @jhlee0219
+/backend/services/dedupe.py     @jhlee0219
+/backend/services/selector.py   @jhlee0219
+
+# 5. 다이어리 생성 — 최고은
+/backend/services/timeline.py   @cge030809
+/backend/services/diary.py      @cge030809
+/prompts/curator.txt            @cge030809
