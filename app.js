@@ -1,10 +1,10 @@
 ﻿const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
 const STORAGE_KEY = 'travel-diary.trips.v1';
-const PHOTO_SPOT_RADIUS_M = 100;
+const PHOTO_SPOT_RADIUS_M = 50;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 5;
 const PHOTO_SPOT_GAP_MS = 10 * 60 * 1000;
-const PHOTO_LOCATION_MATCH_WINDOW_MS = 3 * 60 * 1000;
+const PHOTO_LOCATION_MATCH_WINDOW_MS = 30 * 60 * 1000;
 const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
 const FOOTPRINT_MIN_GAP_MS = 8000;
@@ -1110,11 +1110,11 @@ async function generateDiaryFromFiles(files) {
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.slice(0, 3).map((photo) => photo.dataUrl);
+    const photoUrls = [cluster.photos[0].dataUrl];
     entries.push({
       time: timeLabel,
       place,
-      note: `반경 ${PHOTO_SPOT_RADIUS_M}m 안에서 ${durationMinutes}분 동안 머무르며 사진 ${photoCount}장을 기록했어요.`,
+      note: `반경 ${PHOTO_SPOT_RADIUS_M}m 안에서 사진 ${photoCount}장을 기록했어요.`,
       photoCount,
       photoUrls,
       mainPhoto: photoUrls[0],
@@ -1155,13 +1155,6 @@ async function generateDiaryFromFiles(files) {
 function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) {
   elements.timeline.innerHTML = entries
     .map((entry, index) => {
-      const gallery = Array.isArray(entry.photoUrls)
-        ? `
-          <div class="timeline-gallery">
-            ${entry.photoUrls.slice(0, 4).map((url) => `<img class="timeline-thumb" src="${url}" alt="${entry.place} 사진" />`).join('')}
-          </div>
-        `
-        : '';
       const preview = entry.mainPhoto || entry.image || '';
       return `
         <article class="timeline-entry">
@@ -1179,7 +1172,6 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
               <p class="timeline-count">${entry.durationMinutes ? `${entry.durationMinutes}분 기록` : ''}</p>
             </div>
             ${preview ? `<img class="timeline-photo" src="${preview}" alt="${entry.place} 대표 사진" />` : ''}
-            ${gallery}
             <p class="timeline-note">${entry.note}</p>
           </div>
         </article>
