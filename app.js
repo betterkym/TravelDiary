@@ -41,9 +41,9 @@ const state = {
   calendarOpen: false,
   calendarMonth: null,
   trip: {
-    title: '늦여름 탈린 여행',
-    date: '2026-07-15',
-    region: '에스토니아 탈린',
+    title: '',
+    date: '',
+    region: '',
   },
   sampleTimeline: [
     {
@@ -788,10 +788,13 @@ function renderTripHistory() {
 
 function updateTripTexts() {
   const { title, date, region } = state.trip;
-  const summary = `${title} · ${formatDateLabel(date)} · ${region}`;
+  const displayTitle = title || '새 여행';
+  const summary = [displayTitle, date ? formatDateLabel(date) : null, region]
+    .filter(Boolean)
+    .join(' · ');
   elements.tripSummaryText.textContent = summary;
   elements.diarySummaryText.textContent = summary;
-  document.title = `${title} · Travel Diary`;
+  document.title = `${displayTitle} · Travel Diary`;
 }
 
 function buildApiUrl(path) {
@@ -1446,9 +1449,9 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
 
 function syncCreateFields() {
   const stored = loadCreateFormState();
-  elements.tripTitle.value = stored.title || state.trip.title;
-  elements.tripDate.value = stored.date || state.trip.date;
-  elements.tripRegion.value = stored.region || state.trip.region;
+  elements.tripTitle.value = stored.title || '';
+  elements.tripDate.value = stored.date || '';
+  elements.tripRegion.value = stored.region || '';
 }
 
 function saveCreateFormState() {
