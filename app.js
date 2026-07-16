@@ -1189,14 +1189,16 @@ async function flushLocationQueue({ force = false } = {}) {
   }
 
   const points = state.pendingLocationPoints.slice();
+  const body = JSON.stringify({ points });
   state.locationSyncInFlight = true;
   try {
     const response = await fetch(buildApiUrl(`/api/trips/${state.tripId}/locations`), {
       method: 'POST',
+      keepalive: force && body.length <= 60000,
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ points }),
+      body,
     });
     if (!response.ok) {
       throw new Error(`Location sync failed: ${response.status}`);
