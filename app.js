@@ -984,22 +984,13 @@ function getSamplePoints(trip) {
     }));
 }
 
-function getTripRouteFootprintPoints(trip, photoPoints) {
-  const routePoints = (trip?.recording?.footprints || [])
+function getTripRouteFootprintPoints(trip) {
+  return (trip?.recording?.footprints || [])
     .filter((point) => Number.isFinite(point.lng) && Number.isFinite(point.lat))
     .map((point) => ({
       lngLat: [point.lng, point.lat],
       tip: point.timestamp ? formatTipTime(point.timestamp) : '',
     }));
-
-  if (!routePoints.length || !photoPoints.length) return routePoints;
-
-  return routePoints.filter((point) => {
-    const nearestPhotoDistance = Math.min(
-      ...photoPoints.map((photoPoint) => distanceMeters(point.lngLat, photoPoint.lngLat)),
-    );
-    return nearestPhotoDistance <= 500;
-  });
 }
 
 function getLastSamplePoint(samplePoints) {
@@ -1018,10 +1009,10 @@ function renderTripOnMap(trip) {
 
   const samplePoints = getSamplePoints(trip);
   const photoPoints = getTripPhotoMapPoints(trip);
-  const visiblePoints = photoPoints.length ? photoPoints : samplePoints;
-  setRouteLine(visiblePoints.map((point) => point.lngLat));
+  const routePoints = samplePoints.length ? samplePoints : photoPoints;
+  setRouteLine(routePoints.map((point) => point.lngLat));
 
-  getTripRouteFootprintPoints(trip, photoPoints).forEach((point) => {
+  getTripRouteFootprintPoints(trip).forEach((point) => {
     addFootprint(point.lngLat, point.tip);
   });
 
