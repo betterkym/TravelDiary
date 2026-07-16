@@ -15,7 +15,13 @@ async function copyAsset(fileName) {
 
 async function main() {
   await ensureDir(distDir);
-  await Promise.all(['index.html', 'app.js', 'styles.css'].map(copyAsset));
+  await Promise.all([
+    'index.html',
+    'app.js',
+    'styles.css',
+    'manifest.json',
+    'service-worker.js',
+  ].map(copyAsset));
 
   const token = process.env.MAPBOX_ACCESS_TOKEN || '';
   // 백엔드 API 주소: 환경변수 우선, 없으면 Railway 배포 주소 기본값.
