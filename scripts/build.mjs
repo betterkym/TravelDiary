@@ -18,7 +18,11 @@ async function main() {
   await Promise.all(['index.html', 'app.js', 'styles.css'].map(copyAsset));
 
   const token = process.env.MAPBOX_ACCESS_TOKEN || '';
-  const configJs = `window.MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || ${JSON.stringify(token)};\n`;
+  // 백엔드 API 주소: 환경변수 우선, 없으면 Railway 배포 주소 기본값.
+  const apiBase = process.env.API_BASE_URL || 'https://tranquil-peace-production-45dd.up.railway.app';
+  const configJs =
+    `window.MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || ${JSON.stringify(token)};\n` +
+    `window.API_BASE_URL = window.API_BASE_URL || ${JSON.stringify(apiBase)};\n`;
   const configLocalJs = 'window.MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || "";\n';
   await writeFile(resolve(distDir, 'config.js'), configJs, 'utf8');
   await writeFile(resolve(distDir, 'config.local.js'), configLocalJs, 'utf8');
