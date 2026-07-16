@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline, storage
-from .models import Diary, LocationBatch, PhotoFeedback, TripCreate
+from .models import Diary, DiaryNoteUpdate, LocationBatch, PhotoFeedback, TripCreate
 from .services import exif
 
 app = FastAPI(title="Travel Diary API", version="0.1.0")
@@ -93,6 +93,24 @@ def get_diary(trip_id: str):
     diary = storage.get_diary(trip_id)
     if diary is None:
         raise HTTPException(404, "아직 생성된 다이어리가 없습니다. 먼저 generate 를 호출하세요.")
+    return diary
+
+
+@app.patch("/api/trips/{trip_id}/diary/notes/{entry_index}", response_model=Diary)
+def update_diary_note(trip_id: str, entry_index: int, payload: DiaryNoteUpdate):
+    _require_trip(trip_id)
+    diary = storage.get_diary(trip_id)
+    if diary is None:
+        raise HTTPException(404, "아직 생성된 다이어리가 없습니다. 먼저 generate 를 호출하세요.")
+    if entry_index < 0 or entry_index >= len(diary.timeline):
+        raise HTTPException(404, "수정할 메모를 찾지 못했습니다.")
+    note = payload.note.strip()
+    if not note:
+        raise HTTPException(400, "메모는 비워둘 수 없습니다.")
+    if len(note) > 300:
+        raise HTTPException(400, "메모는 300자 이내로 작성해 주세요.")
+    diary.timeline[entry_index].note = note
+    storage.save_diary(trip_id, diary)
     return diary
 
 

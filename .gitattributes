@@ -1,0 +1,39 @@
+# 저장소 안에서는 모든 텍스트 파일을 LF로 통일한다.
+# 맥/윈도우 팀원이 섞여 있어도 줄바꿈(CRLF vs LF) 때문에
+# 파일 전체가 충돌로 잡히는 문제를 없앤다.
+* text=auto eol=lf
+
+# --- 텍스트 파일 (LF 강제) ---
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.cjs    text eol=lf
+*.ts     text eol=lf
+*.json   text eol=lf
+*.html   text eol=lf
+*.css    text eol=lf
+*.py     text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+*.env    text eol=lf
+
+# --- 윈도우 전용 스크립트는 CRLF 유지 ---
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# --- 바이너리 (절대 건드리지 않음) ---
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.zip    binary
+*.mp4    binary
+*.mov    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary

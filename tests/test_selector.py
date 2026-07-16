@@ -7,7 +7,7 @@ def test_select_caps_at_max():
     photos = [Photo(photo_id=str(i), filename=f"{i}.jpg") for i in range(12)]
     out = selector.select(photos, max_count=8)
     assert len(out) == 8
-    assert out[0].photo_url.startswith("/outputs/")
+    assert out[0].photo_url.startswith("/uploads/")
 
 
 def test_select_fewer_than_max():

@@ -25,10 +25,14 @@ def select(
         groups.setdefault(key, []).append(p)
 
     # 2) 그룹마다 품질 최고 1장을 대표 후보로
+    #    - 흔들림/노출 등으로 rejected 된 사진은 제외.
+    #    - 단, 그룹 전체가 rejected 면 그중 최고라도 남긴다(빈 자리 방지).
     candidates: list[tuple[Photo, int]] = []  # (사진, 그룹 크기)
     for members in groups.values():
+        usable = [m for m in members if not getattr(m, "rejected", False)]
+        pool = usable or members
         best = max(
-            members,
+            pool,
             key=lambda p: (
                 p.quality_score or 0.0,
                 p.composition_score or 0.0,

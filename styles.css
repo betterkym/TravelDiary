@@ -282,6 +282,45 @@ input::placeholder {
   text-overflow: ellipsis;
 }
 
+.trip-history-label {
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trip-history {
+  display: none;
+}
+
+.trip-history-label {
+  display: none;
+}
+
+.map-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.calendar-toggle {
+  border: 1px solid rgba(111, 80, 66, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 1.1rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(72, 48, 35, 0.08);
+  display: inline-grid;
+  place-items: center;
+}
+
 .map-stage {
   position: relative;
   flex: 1;
@@ -712,6 +751,143 @@ input::placeholder {
   font-weight: 700;
 }
 
+.calendar-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: end center;
+  padding: 16px 12px 0;
+}
+
+.calendar-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(57, 37, 25, 0.34);
+  backdrop-filter: blur(6px);
+}
+
+.calendar-sheet {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 480px);
+  margin: 0 auto;
+  background: rgba(255, 251, 245, 0.98);
+  border-radius: 28px 28px 0 0;
+  box-shadow: 0 -12px 30px rgba(72, 48, 35, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  padding: 18px;
+  max-height: min(78vh, 760px);
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+}
+
+.calendar-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-head h2 {
+  margin: 4px 0 0;
+  font-size: 1.35rem;
+  font-family: "Georgia", "Times New Roman", serif;
+}
+
+.calendar-close,
+.calendar-nav-button {
+  border: 1px solid rgba(111, 80, 66, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 10px 12px;
+  border-radius: 999px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.calendar-nav {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.calendar-month {
+  text-align: center;
+  font-weight: 800;
+  color: var(--accent-strong);
+}
+
+.calendar-weekdays,
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.calendar-weekdays span {
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.calendar-day {
+  min-height: 56px;
+  border-radius: 16px;
+  border: 1px solid rgba(111, 80, 66, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  padding: 8px;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.calendar-day.is-empty {
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+}
+
+.calendar-day.is-muted {
+  opacity: 0.4;
+}
+
+.calendar-day.is-selected {
+  border-color: rgba(222, 123, 85, 0.3);
+  box-shadow: 0 8px 18px rgba(80, 53, 40, 0.08);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.calendar-day.has-trip::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.calendar-day-number {
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.calendar-day-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.calendar-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -756,4 +932,37 @@ input::placeholder {
     right: 14px;
     bottom: 14px;
   }
+}
+
+/* 홈 화면 두 갈래 모드 버튼 */
+.mode-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mode-hint {
+  margin-top: 10px;
+  font-size: 0.82rem;
+  color: #8a8a8a;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.record-button--live-photo {
+  background: #ffffff;
+  color: #d8663f;
+  border: 1px solid rgba(216, 102, 63, 0.35);
+}
+
+/* 지도 위 현장 사진 마커 */
+.live-photo-marker img {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 3px solid #ffffff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  display: block;
 }

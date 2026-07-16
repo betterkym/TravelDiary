@@ -7,6 +7,8 @@ AI 키가 설정돼 있으면 AI 문구를, 없거나 실패하면 규칙 기반
 """
 from __future__ import annotations
 
+import re
+
 from ..models import TimelineEntry
 
 
@@ -48,12 +50,23 @@ def _try_ai_notes(entries: list[TimelineEntry]):
 
 
 def _fallback_note(entry: TimelineEntry) -> str:
-    """촬영 시간대 + 장소로 만드는 규칙 기반 한 줄 문구."""
-    place = entry.place if entry.place and entry.place != "장소 미정" else "이곳"
+    """장소·시간을 바탕으로 담백한 초안 메모를 만든다.
+
+    여행 앱의 기본 문구는 쉽게 과장되기 때문에 감탄사, 감정 단정,
+    "소중한 순간" 같은 상투어를 피하고 사용자가 고쳐 쓰기 쉬운
+    관찰형 문장으로 제한한다.
+    """
+    place = _clean_place(entry.place)
     part = _time_of_day(entry)
     if place == "이동 중":
-        return f"{part} 이동하며 남긴 한 컷"
-    return f"{part} {place}에서의 순간"
+        return f"{part} 이동 구간에서 남긴 기록. 경로 흐름을 이어 주는 장면으로 정리했어요."
+
+    templates = [
+        f"{part} {place}에서 남긴 기록. 이 위치가 오늘 동선의 한 지점으로 선명하게 잡혔어요.",
+        f"{place}에 머문 흔적을 {part} 기록으로 묶었어요. 사진과 위치가 같은 흐름 안에 있어요.",
+        f"{part}의 {place} 기록. 이동 중 지나친 곳이 아니라 잠시 멈춘 지점으로 정리했어요.",
+    ]
+    return templates[_template_index(entry, len(templates))]
 
 
 def _time_of_day(entry: TimelineEntry) -> str:
@@ -70,3 +83,19 @@ def _time_of_day(entry: TimelineEntry) -> str:
     if 18 <= h < 21:
         return "저녁"
     return "밤"
+
+
+def _clean_place(place: str) -> str:
+    text = (place or "").strip()
+    if not text or text in {"장소 미정", "정차 지점"}:
+        return "이곳"
+    text = re.sub(r"\s+", " ", text)
+    # Mapbox 전체 주소가 들어오면 첫 지명만 써서 문장이 길어지지 않게 한다.
+    return text.split(",")[0].strip() or "이곳"
+
+
+def _template_index(entry: TimelineEntry, size: int) -> int:
+    if size <= 1:
+        return 0
+    key = f"{entry.place}|{entry.time.isoformat() if entry.time else ''}"
+    return sum(ord(ch) for ch in key) % size

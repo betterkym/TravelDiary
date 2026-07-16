@@ -10,6 +10,12 @@ uploads/*
 !uploads/.gitkeep
 outputs/*
 !outputs/.gitkeep
+dist/
+
+# 로컬 SQLite DB (백엔드 실행 시 생성, 커밋 금지)
+data/
+*.sqlite3
+*.db
 
 # Python
 __pycache__/

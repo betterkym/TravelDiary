@@ -71,7 +71,10 @@ class Photo(BaseModel):
     edge_balance_score: Optional[float] = None
     saturation_score: Optional[float] = None
     face_hint_score: Optional[float] = None
+    backlight_score: Optional[float] = None
     group_id: Optional[str] = None       # 유사사진 그룹 (dedupe)
+    rejected: bool = False               # 명백히 못 쓰는 컷(흔들림/노출/역광/해상도)
+    reject_reason: str = ""
 
 
 class SelectedPhoto(BaseModel):
@@ -86,6 +89,11 @@ class PhotoFeedback(BaseModel):
     accepted_photo_ids: list[str] = Field(default_factory=list)
     rejected_photo_ids: list[str] = Field(default_factory=list)
     notes: Optional[str] = None
+
+
+class DiaryNoteUpdate(BaseModel):
+    """PATCH /api/trips/{trip_id}/diary/notes/{index} 요청 본문."""
+    note: str
 
 
 # --- 처리 결과: 다이어리 (5번) -------------------------------------------
