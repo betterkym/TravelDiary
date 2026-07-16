@@ -5,7 +5,6 @@ const PHOTO_SPOT_RADIUS_M = 50;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 5;
 const PHOTO_SPOT_GAP_MS = 10 * 60 * 1000;
-const PHOTO_LOCATION_MATCH_WINDOW_MS = 30 * 60 * 1000;
 const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
 const FOOTPRINT_MIN_GAP_MS = 15 * 1000;
@@ -654,13 +653,46 @@ function findNearestLocationSample(targetTime) {
   return best;
 }
 
-function findStableLocationSample(targetTime) {
-  const nearest = findNearestLocationSample(targetTime);
-  if (!nearest) return null;
-  const gap = Math.abs(nearest.timestamp - targetTime.getTime());
-  if (gap > PHOTO_LOCATION_MATCH_WINDOW_MS) return null;
-  if (typeof nearest.lng !== 'number' || typeof nearest.lat !== 'number') return null;
-  return nearest;
+function findLocationSamplesAround(targetTime) {
+  if (!state.locationSamples.length || !targetTime) return { before: null, after: null };
+  const target = targetTime.getTime();
+  let before = null;
+  let after = null;
+
+  for (const sample of state.locationSamples) {
+    if (typeof sample.lng !== 'number' || typeof sample.lat !== 'number') continue;
+    if (sample.timestamp <= target && (!before || sample.timestamp > before.timestamp)) {
+      before = sample;
+    }
+    if (sample.timestamp >= target && (!after || sample.timestamp < after.timestamp)) {
+      after = sample;
+    }
+  }
+
+  return { before, after };
+}
+
+function estimatePhotoLocation(photo) {
+  if (Number.isFinite(photo.lat) && Number.isFinite(photo.lng)) {
+    return { lat: photo.lat, lng: photo.lng, source: 'exif' };
+  }
+  if (!photo.takenAt) return null;
+
+  const { before, after } = findLocationSamplesAround(photo.takenAt);
+  if (before && after && before.timestamp !== after.timestamp) {
+    const target = photo.takenAt.getTime();
+    const ratio = (target - before.timestamp) / (after.timestamp - before.timestamp);
+    const clamped = Math.max(0, Math.min(1, ratio));
+    return {
+      lat: before.lat + (after.lat - before.lat) * clamped,
+      lng: before.lng + (after.lng - before.lng) * clamped,
+      source: 'interpolated',
+    };
+  }
+
+  const nearest = findNearestLocationSample(photo.takenAt);
+  if (!nearest || typeof nearest.lng !== 'number' || typeof nearest.lat !== 'number') return null;
+  return { lat: nearest.lat, lng: nearest.lng, source: 'nearest' };
 }
 
 function centerMapOn(lngLat, zoom = 15.5) {
@@ -1241,12 +1273,11 @@ async function generateDiaryFromFiles(files) {
 
   const photoData = parsed
     .map((photo) => {
-      if ((photo.lat == null || photo.lng == null) && photo.takenAt) {
-        const nearest = findStableLocationSample(photo.takenAt);
-        if (nearest) {
-          photo.lat = nearest.lat;
-          photo.lng = nearest.lng;
-        }
+      const estimated = estimatePhotoLocation(photo);
+      if (estimated) {
+        photo.lat = estimated.lat;
+        photo.lng = estimated.lng;
+        photo.locationSource = estimated.source;
       }
       return photo;
     })
