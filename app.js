@@ -1249,6 +1249,8 @@ function formatDateTimeLabel(date) {
 
 function selectRepresentativePhotos(photos, maxCount = 3) {
   const selected = [];
+  const similarThresholdMs = 8 * 60 * 1000;
+  const similarThresholdM = 45;
   for (const photo of photos) {
     if (!photo) continue;
     if (!selected.length) {
@@ -1260,7 +1262,7 @@ function selectRepresentativePhotos(photos, maxCount = 3) {
     const distance = Number.isFinite(photo.lat) && Number.isFinite(photo.lng) && Number.isFinite(lastSelected.lat) && Number.isFinite(lastSelected.lng)
       ? distanceMeters([lastSelected.lng, lastSelected.lat], [photo.lng, photo.lat])
       : Infinity;
-    if (timeGap <= 2 * 60 * 1000 && distance <= 20) {
+    if (timeGap <= similarThresholdMs && distance <= similarThresholdM) {
       continue;
     }
     selected.push(photo);
