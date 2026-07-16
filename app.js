@@ -2632,6 +2632,13 @@ function createTrip() {
     .then((data) => {
       state.tripId = data.trip_id || null;
       if (state.tripId) {
+        if (state.activeTrip) {
+          state.activeTrip.id = state.tripId;
+          state.activeTripId = state.tripId;
+          state.selectedTripId = state.tripId;
+          upsertSavedTrip(state.activeTrip);
+          renderTripHistory();
+        }
         saveLastTripId(state.tripId);
         flushLocationQueue({ force: true });
         showToast('여행이 서버에 생성되었어요. 이제 사진을 올릴 수 있어요.');

@@ -417,6 +417,7 @@ def get_latest_trip_id() -> Optional[str]:
             "trips",
             {
                 "select": "trip_id",
+                "diary_json": "not.is.null",
                 "order": "created_at.desc",
             },
         )
@@ -424,7 +425,7 @@ def get_latest_trip_id() -> Optional[str]:
 
     with _connect() as conn:
         row = conn.execute(
-            "SELECT trip_id FROM trips ORDER BY rowid DESC LIMIT 1"
+            "SELECT trip_id FROM trips WHERE diary_json IS NOT NULL ORDER BY rowid DESC LIMIT 1"
         ).fetchone()
     if not row:
         return None

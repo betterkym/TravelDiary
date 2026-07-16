@@ -158,5 +158,44 @@ def test_list_trips_returns_saved_diaries_for_calendar_sync():
         assert len(trips_by_id[trip_id]["locations"]) == 2
 
 
+def test_latest_trip_ignores_empty_drafts():
+    now = datetime(2026, 7, 16, 9, 0, tzinfo=timezone.utc)
+    ready = client.post(
+        "/api/trips",
+        json={
+            "title": "완성된 여행",
+            "start_date": "2026-07-16",
+            "region": "서울",
+        },
+    )
+    assert ready.status_code == 200
+    ready_id = ready.json()["trip_id"]
+    client.post(
+        f"/api/trips/{ready_id}/locations",
+        json={
+            "points": [
+                {"lat": 37.0, "lng": 127.0, "time": now.isoformat()},
+                {"lat": 37.001, "lng": 127.001, "time": (now + timedelta(minutes=5)).isoformat()},
+            ]
+        },
+    )
+    assert client.post(f"/api/trips/{ready_id}/generate").status_code == 200
+
+    draft = client.post(
+        "/api/trips",
+        json={
+            "title": "빈 여행",
+            "start_date": "2026-07-17",
+            "region": "서울",
+        },
+    )
+    assert draft.status_code == 200
+
+    latest = client.get("/api/trips/latest")
+
+    assert latest.status_code == 200
+    assert latest.json()["trip_id"] == ready_id
+
+
 def test_unknown_trip_404():
     assert client.get("/api/trips/nope/diary").status_code == 404
