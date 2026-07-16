@@ -52,17 +52,107 @@ def make_title(entries: list[TimelineEntry], region: str = "") -> str:
 
 
 def _try_ai_notes(entries: list[TimelineEntry]):
-    """AI 문구 생성 훅. 키가 없으면 조용히 None (fallback 사용).
+    """Claude 비전으로 사진을 실제로 '보고' 사람처럼 메모 초안을 쓴다.
 
-    TODO(5번): config.AI_API_KEY 로 실제 AI SDK 호출 후 notes 리스트 반환.
-    지금은 키 유무만 확인하고, 실제 호출은 붙이지 않았습니다(외부 의존).
+    사진 속 랜드마크·건물·음식·날씨·분위기·표정을 장소명/시각과 엮어
+    관찰형 한국어 메모를 만든다. AI_API_KEY 가 없거나 호출이 실패하면
+    None 을 반환해 규칙 기반 fallback 이 쓰이게 한다.
     """
     from .. import config
 
     if not config.AI_API_KEY:
         return None
-    # 실제 SDK 연동 전까지는 fallback 을 쓰도록 None 반환
-    return None
+    try:
+        return _generate_vision_notes(entries, config)
+    except Exception:
+        return None
+
+
+def _generate_vision_notes(entries: list[TimelineEntry], config) -> list[str] | None:
+    import base64
+    import io
+    import json
+
+    import anthropic
+    from PIL import Image, ImageOps
+
+    # 각 엔트리의 사진을 축소 JPEG(base64)로 준비
+    content: list[dict] = []
+    valid_index: list[int] = []  # content 에 실린 엔트리의 원본 인덱스
+    for i, e in enumerate(entries):
+        if not e.photo_url:
+            continue
+        filename = e.photo_url.rsplit("/", 1)[-1]
+        path = config.UPLOAD_DIR / filename
+        if not path.exists():
+            continue
+        try:
+            with Image.open(path) as img:
+                rgb = ImageOps.exif_transpose(img).convert("RGB")
+                rgb.thumbnail((768, 768), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                rgb.save(buf, format="JPEG", quality=80)
+            data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        except Exception:
+            continue
+
+        place = _clean_place(e.place)
+        clock = _clock_text(e).lstrip(", ") or "시각 미상"
+        content.append({"type": "text", "text": f"[사진 {len(valid_index) + 1}] 장소: {place} / 시각: {clock}"})
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
+        })
+        valid_index.append(i)
+
+    if not valid_index:
+        return None
+
+    content.append({
+        "type": "text",
+        "text": (
+            "너는 여행 다이어리의 메모 초안을 쓰는 작가다. 위 사진들을 각각 실제로 관찰해서, "
+            "사진마다 한국어 메모 초안을 1~2문장으로 써라.\n"
+            "- 사진에서 실제로 보이는 것(랜드마크나 유명 장소가 보이면 그 이름, 건물, 음식, 날씨, 계절감, "
+            "실내/야외, 분위기, 사람의 표정이나 몸짓)을 장소명·시각과 자연스럽게 엮어라.\n"
+            "- 사람이 직접 쓴 것처럼 담백한 관찰체('~했다', '~이다')로. 감탄사, 과장, "
+            "'소중한 순간' 같은 상투어, AI 티 나는 문구 금지.\n"
+            "- 사진에 없는 것을 지어내지 마라. 확실하지 않은 랜드마크 이름은 쓰지 마라.\n"
+            f"- 사진 수는 {len(valid_index)}장이다. notes 배열 길이도 정확히 {len(valid_index)}이어야 한다."
+        ),
+    })
+
+    client = anthropic.Anthropic(api_key=config.AI_API_KEY)
+    response = client.with_options(timeout=60.0, max_retries=1).messages.create(
+        model="claude-opus-4-8",
+        max_tokens=2000,
+        output_config={
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "notes": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["notes"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        messages=[{"role": "user", "content": content}],
+    )
+
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    notes = json.loads(text).get("notes", [])
+    if not notes:
+        return None
+
+    # valid_index 기준으로 전체 엔트리 길이의 리스트로 재배열 (빠진 사진은 None → fallback)
+    result: list[str | None] = [None] * len(entries)
+    for j, idx in enumerate(valid_index):
+        if j < len(notes) and isinstance(notes[j], str) and notes[j].strip():
+            result[idx] = notes[j].strip()
+    return result
 
 
 def _fallback_note(entry: TimelineEntry) -> str:

@@ -157,17 +157,7 @@ function formatElapsed(seconds) {
 function makeFootprintElement() {
   const el = document.createElement('div');
   el.className = 'footprint-marker';
-  el.innerHTML = `
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <g fill="currentColor">
-        <ellipse cx="21" cy="14" rx="5" ry="7" transform="rotate(-18 21 14)"></ellipse>
-        <ellipse cx="33" cy="11" rx="5" ry="7" transform="rotate(5 33 11)"></ellipse>
-        <ellipse cx="44" cy="16" rx="5" ry="7" transform="rotate(22 44 16)"></ellipse>
-        <ellipse cx="50" cy="27" rx="4.6" ry="6.4" transform="rotate(34 50 27)"></ellipse>
-        <path d="M18 22c-5 8-5 18 0 26 4 6 10 8 15 8s11-2 15-7c4-5 5-13 2-20-2-6-6-10-11-12-7-3-16-2-21 5z"></path>
-      </g>
-    </svg>
-  `;
+  el.innerHTML = '<span aria-hidden="true"></span>';
   return el;
 }
 
@@ -753,6 +743,96 @@ function setRouteLine(coordinates) {
   });
 }
 
+function isValidLngLat(lngLat) {
+  return Array.isArray(lngLat) && Number.isFinite(lngLat[0]) && Number.isFinite(lngLat[1]);
+}
+
+function sortByTakenAt(left, right) {
+  return new Date(left.takenAt || 0) - new Date(right.takenAt || 0);
+}
+
+function getTripPhotoMapPoints(trip) {
+  const points = [];
+  const seen = new Set();
+  const addPoint = ({ lngLat, tip = '', imageUrl = '', id = '' }) => {
+    if (!isValidLngLat(lngLat)) return;
+    const key = id || `${lngLat[0].toFixed(6)},${lngLat[1].toFixed(6)},${tip}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    points.push({ lngLat, tip, imageUrl });
+  };
+
+  (trip?.diary || []).forEach((entry, index) => {
+    addPoint({
+      lngLat: Array.isArray(entry.center) ? entry.center : null,
+      tip: entry.timestamp ? formatTipTime(entry.timestamp) : '',
+      imageUrl: entry.mainPhoto || entry.photoUrls?.[0] || '',
+      id: entry.photoId || `diary_${index}`,
+    });
+  });
+
+  if (!points.length) {
+    (trip?.recording?.livePhotos || [])
+      .filter((photo) => Number.isFinite(photo.lng) && Number.isFinite(photo.lat))
+      .sort(sortByTakenAt)
+      .forEach((photo) => {
+        addPoint({
+          lngLat: [photo.lng, photo.lat],
+          tip: photo.takenAt ? formatTipTime(photo.takenAt) : '',
+          imageUrl: photo.dataUrl || '',
+          id: photo.id,
+        });
+      });
+  }
+
+  if (!points.length) {
+    (trip?.photos || [])
+      .filter((photo) => Number.isFinite(photo.lng) && Number.isFinite(photo.lat))
+      .sort(sortByTakenAt)
+      .forEach((photo) => {
+        addPoint({
+          lngLat: [photo.lng, photo.lat],
+          tip: photo.takenAt ? formatTipTime(photo.takenAt) : '',
+          imageUrl: photo.dataUrl || photo.url || '',
+          id: photo.id,
+        });
+      });
+  }
+
+  return points;
+}
+
+function getSamplePoints(trip) {
+  return (trip?.recording?.samples || [])
+    .filter((sample) => Number.isFinite(sample.lng) && Number.isFinite(sample.lat))
+    .map((sample) => ({
+      lngLat: [sample.lng, sample.lat],
+      tip: sample.timestamp ? formatTipTime(sample.timestamp) : '',
+    }));
+}
+
+function getTripRouteFootprintPoints(trip, photoPoints) {
+  const routePoints = (trip?.recording?.footprints || [])
+    .filter((point) => Number.isFinite(point.lng) && Number.isFinite(point.lat))
+    .map((point) => ({
+      lngLat: [point.lng, point.lat],
+      tip: point.timestamp ? formatTipTime(point.timestamp) : '',
+    }));
+
+  if (!routePoints.length || !photoPoints.length) return routePoints;
+
+  return routePoints.filter((point) => {
+    const nearestPhotoDistance = Math.min(
+      ...photoPoints.map((photoPoint) => distanceMeters(point.lngLat, photoPoint.lngLat)),
+    );
+    return nearestPhotoDistance <= 500;
+  });
+}
+
+function getLastSamplePoint(samplePoints) {
+  return samplePoints[samplePoints.length - 1] || null;
+}
+
 function renderTripOnMap(trip) {
   if (!state.map) return;
   // 지도 스타일이 아직 로드 전이면 로드 완료 후 다시 그린다 (경로선 addSource 실패 방지)
@@ -763,47 +843,33 @@ function renderTripOnMap(trip) {
   clearLiveMarkers();
   ensureRouteLayer();
 
-  const samples = trip?.recording?.samples || [];
-  const coordinates = samples.map((sample) => [sample.lng, sample.lat]);
-  setRouteLine(coordinates);
+  const samplePoints = getSamplePoints(trip);
+  const photoPoints = getTripPhotoMapPoints(trip);
+  const visiblePoints = photoPoints.length ? photoPoints : samplePoints;
+  setRouteLine(visiblePoints.map((point) => point.lngLat));
 
-  (trip?.recording?.footprints || []).forEach((point) => {
-    addFootprint([point.lng, point.lat], point.timestamp ? formatTipTime(point.timestamp) : '');
+  getTripRouteFootprintPoints(trip, photoPoints).forEach((point) => {
+    addFootprint(point.lngLat, point.tip);
   });
 
-  (trip?.recording?.livePhotos || []).forEach((photo) => {
-    if (photo.dataUrl && Number.isFinite(photo.lng) && Number.isFinite(photo.lat)) {
-      addLivePhotoMarker([photo.lng, photo.lat], photo.dataUrl);
+  photoPoints.forEach((point) => {
+    if (point.imageUrl) {
+      addLivePhotoMarker(point.lngLat, point.imageUrl);
+    } else {
+      addFootprint(point.lngLat, point.tip);
     }
   });
 
-  // 실시간 GPS 기록이 없고 업로드한 사진만 있는 여행: 사진/다이어리 위치로 경로·발자취 표시
-  if (!samples.length) {
-    let points = [];
-    // 1순위: 저장된 사진 좌표 (+ 촬영시각 툴팁)
-    if (Array.isArray(trip?.photos) && trip.photos.length) {
-      points = trip.photos
-        .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat))
-        .sort((a, b) => new Date(a.takenAt) - new Date(b.takenAt))
-        .map((p) => ({ lngLat: [p.lng, p.lat], tip: formatTipTime(p.takenAt) }));
-    }
-    // 2순위: 다이어리 엔트리 위치(항상 보존됨)
-    if (!points.length && Array.isArray(trip?.diary) && trip.diary.length) {
-      points = trip.diary
-        .filter((e) => Array.isArray(e.center) && Number.isFinite(e.center[0]) && Number.isFinite(e.center[1]))
-        .map((e) => ({ lngLat: e.center, tip: e.timestamp ? formatTipTime(e.timestamp) : '' }));
-    }
-    if (points.length) {
-      setRouteLine(points.map((p) => p.lngLat));
-      points.forEach((p) => addFootprint(p.lngLat, p.tip));
-      centerMapOn(points[points.length - 1].lngLat, 14);
-    }
-  }
-
-  const last = samples[samples.length - 1];
+  const last = getLastSamplePoint(samplePoints);
   if (last) {
-    ensureCurrentMarker([last.lng, last.lat]);
-    centerMapOn([last.lng, last.lat], 15.5);
+    ensureCurrentMarker(last.lngLat);
+  }
+  if (photoPoints.length) {
+    focusMapOnPoints(photoPoints);
+  } else if (last) {
+    centerMapOn(last.lngLat, 15.5);
+  } else if (samplePoints.length) {
+    focusMapOnPoints(samplePoints);
   }
 }
 
@@ -1777,14 +1843,11 @@ async function generateDiaryFromPhotoData(parsed) {
     upsertSavedTrip(state.activeTrip);
   }
 
-  // 지도에 사진 위치 표시 (촬영시각 툴팁 포함)
-  photoData.forEach((photo) => {
-    addFootprint([photo.lng, photo.lat], formatTipTime(photo.takenAt));
-  });
-
-  // 경로선 그리기
-  const photoCoordinates = photoData.map((photo) => [photo.lng, photo.lat]);
-  setRouteLine(photoCoordinates);
+  if (state.activeTrip) {
+    renderTripOnMap(state.activeTrip);
+  } else {
+    focusMapOnPoints(entries.map((entry) => ({ lngLat: entry.center })));
+  }
 
   // 다이어리 전체(장소 빈도·시간 범위)를 보고 자동 제목
   await suggestTitleFromEntries(entries);
@@ -2107,6 +2170,7 @@ function addLivePhotoMarker(lngLat, dataUrl) {
 // 위치 우선순위: ① 사진 자체의 EXIF GPS(앨범 사진이 찍힌 곳) ② 촬영시각과 이동기록 보간 ③ 현재 위치
 async function handleLivePhotoCapture(files) {
   let added = 0;
+  const addedPoints = [];
   for (const file of files) {
     try {
       const photo = await parsePhotoFile(file);
@@ -2124,6 +2188,7 @@ async function handleLivePhotoCapture(files) {
         continue;
       }
       addLivePhotoMarker(lngLat, photo.dataUrl);
+      addedPoints.push({ lngLat });
       if (state.activeTrip) {
         state.activeTrip.recording.livePhotos = state.activeTrip.recording.livePhotos || [];
         state.activeTrip.recording.livePhotos.push({
@@ -2141,7 +2206,10 @@ async function handleLivePhotoCapture(files) {
       console.error(error);
     }
   }
-  if (added) showToast(`현장 사진 ${added}장을 지도에 추가했어요 📍`);
+  if (added) {
+    focusMapOnPoints(addedPoints);
+    showToast(`현장 사진 ${added}장을 지도에 추가했어요`);
+  }
 }
 
 function handleNav(target) {
@@ -2219,7 +2287,8 @@ async function uploadPhotosToApi(files) {
 }
 
 async function submitPhotoFeedback(photoId, kind = 'reject') {
-  if (!state.tripId || !photoId) return;
+  if (!photoId) return;
+  // 로컬 선호는 서버 연결과 무관하게 항상 저장
   if (kind === 'approve') {
     state.acceptedPhotoIds.add(photoId);
     state.rejectedPhotoIds.delete(photoId);
@@ -2227,6 +2296,7 @@ async function submitPhotoFeedback(photoId, kind = 'reject') {
     state.rejectedPhotoIds.add(photoId);
     state.acceptedPhotoIds.delete(photoId);
   }
+  if (!state.tripId) return;
   const rejected_photo_ids = Array.from(state.rejectedPhotoIds);
   const accepted_photo_ids = Array.from(state.acceptedPhotoIds);
 
@@ -2399,13 +2469,30 @@ function bootstrap() {
     const photoId = button.dataset.feedbackPhoto;
     const kind = button.dataset.feedbackKind || 'reject';
     if (!photoId || photoId === 'undefined') return;
+
+    // ① 즉시 시각 반응 (서버 결과와 무관하게): 버튼 색·팝 + 사진 중앙 이모지 버스트
+    button.classList.remove('is-sent', 'is-sent-approve', 'is-sent-reject');
+    // 반대 버튼의 선택 상태는 해제
+    const wrap = button.closest('.timeline-photo-wrap');
+    if (wrap) {
+      wrap.querySelectorAll('.photo-feedback-button').forEach((b) => {
+        if (b !== button) b.classList.remove('is-sent', 'is-sent-approve', 'is-sent-reject');
+      });
+      const burst = document.createElement('span');
+      burst.className = 'feedback-burst';
+      burst.textContent = kind === 'approve' ? '👍' : '👎';
+      wrap.appendChild(burst);
+      burst.addEventListener('animationend', () => burst.remove());
+    }
+    // reflow 후 클래스 부여 (연속 클릭에도 팝 애니메이션 재생)
+    void button.offsetWidth;
+    button.classList.add('is-sent', kind === 'approve' ? 'is-sent-approve' : 'is-sent-reject');
+
+    // ② 저장은 백그라운드: 로컬 상태는 항상 반영, 서버 전송 실패는 조용히 넘어감
     try {
       await submitPhotoFeedback(photoId, kind);
-      button.classList.add('is-sent', kind === 'approve' ? 'is-sent-approve' : 'is-sent-reject');
-      showToast(kind === 'approve' ? '좋아요를 반영했어요' : '별로예요를 반영했어요');
     } catch (error) {
-      console.error(error);
-      showToast('선호 저장 중 오류가 발생했어요.');
+      console.warn('피드백 서버 전송 실패(로컬에는 반영됨):', error);
     }
   });
   elements.navButtons.forEach((button) => {

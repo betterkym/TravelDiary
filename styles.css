@@ -86,13 +86,17 @@ button {
 }
 
 .brand-badge {
+  display: inline-flex;
+  align-items: center;
   align-self: flex-start;
+  min-height: 40px;
   padding: 8px 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.76);
   color: var(--accent-strong);
   font-size: 0.85rem;
   font-weight: 800;
+  white-space: nowrap;
   box-shadow: var(--shadow);
 }
 
@@ -109,6 +113,7 @@ button {
   cursor: pointer;
   font-size: 0.84rem;
   font-weight: 800;
+  white-space: nowrap;
   box-shadow: 0 10px 18px rgba(72, 48, 35, 0.08);
 }
 
@@ -192,18 +197,28 @@ button {
 label {
   display: grid;
   gap: 8px;
+  width: 100%;
   font-size: 0.92rem;
   font-weight: 700;
 }
 
 input {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
   width: 100%;
+  min-height: 52px;
   border: 1px solid rgba(111, 80, 66, 0.16);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.88);
   padding: 13px 15px;
   color: var(--ink);
+  line-height: 1.2;
   outline: none;
+}
+
+input[type="date"] {
+  min-height: 52px;
 }
 
 input:focus {
@@ -487,16 +502,22 @@ textarea:focus-visible {
 }
 
 .footprint-marker {
-  width: 30px;
-  height: 30px;
-  color: #c56e4f;
-  filter: drop-shadow(0 6px 8px rgba(88, 58, 43, 0.18));
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  background: rgba(216, 111, 78, 0.22);
+  box-shadow: 0 5px 12px rgba(88, 58, 43, 0.2);
 }
 
-.footprint-marker svg {
+.footprint-marker span {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #c56e4f;
 }
 
 .current-location-marker {
@@ -1006,6 +1027,7 @@ textarea:focus-visible {
 .mode-actions {
   display: grid;
   gap: 10px;
+  grid-auto-rows: minmax(76px, auto);
 }
 
 .mode-choice {
@@ -1014,7 +1036,8 @@ textarea:focus-visible {
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 68px;
+  min-height: 76px;
+  height: 100%;
   padding: 12px;
   border: 1px solid rgba(111, 80, 66, 0.14);
   border-radius: 18px;
@@ -1062,6 +1085,7 @@ textarea:focus-visible {
   display: grid;
   gap: 4px;
   min-width: 0;
+  align-content: center;
 }
 
 .mode-choice-title {
@@ -1073,6 +1097,7 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .mode-choice-arrow {
@@ -1084,6 +1109,48 @@ textarea:focus-visible {
 
 .mode-choice--primary .mode-choice-arrow {
   color: var(--accent-strong);
+}
+
+@media (max-width: 420px) {
+  .form-card {
+    gap: 11px;
+  }
+
+  input {
+    min-height: 52px;
+    border-radius: 15px;
+  }
+
+  .mode-actions {
+    grid-auto-rows: 82px;
+  }
+
+  .mode-choice {
+    min-height: 82px;
+    grid-template-columns: 40px minmax(0, 1fr) 20px;
+    padding: 11px;
+    border-radius: 17px;
+  }
+
+  .mode-choice-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .mode-choice-title,
+  .mode-choice-desc {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .mode-choice-title {
+    -webkit-line-clamp: 1;
+  }
+
+  .mode-choice-desc {
+    -webkit-line-clamp: 2;
+  }
 }
 
 .record-button--live-photo {
@@ -1213,3 +1280,35 @@ textarea:focus-visible {
   cursor: pointer;
 }
 .status-pill--video:disabled { opacity: 0.55; cursor: wait; }
+
+/* 피드별 액션 버튼(지도에서 보기/수정/삭제) 크기 축소 */
+.timeline-actions-group .timeline-button {
+  font-size: 0.72rem;
+  padding: 6px 10px;
+}
+
+/* 타임라인 레일 점 살짝 축소 */
+.timeline-dot {
+  width: 10px;
+  height: 10px;
+}
+
+/* 좋아요/싫어요 클릭 시 사진 중앙 이모지 버스트 */
+.feedback-burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.3);
+  font-size: 3.2rem;
+  pointer-events: none;
+  z-index: 6;
+  opacity: 0;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  animation: burst-pop 850ms ease forwards;
+}
+@keyframes burst-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3); }
+  25% { opacity: 1; transform: translate(-50%, -50%) scale(1.5); }
+  60% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.05); }
+}
