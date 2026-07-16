@@ -1330,19 +1330,12 @@ function clearLastDiarySnapshot() {
 }
 
 function normalizeTimelineEntries(entries) {
-  const dayIndexByDate = new Map();
-  let nextDayIndex = 1;
   return entries.map((entry) => {
     const timestamp = entry.timestamp instanceof Date ? entry.timestamp : new Date(entry.timestamp);
-    const dateKey = getLocalDateKey(timestamp);
-    if (!dayIndexByDate.has(dateKey)) {
-      dayIndexByDate.set(dateKey, nextDayIndex);
-      nextDayIndex += 1;
-    }
     return {
       ...entry,
       timestamp,
-      dayLabel: `${dayIndexByDate.get(dateKey)}일차`,
+      dayLabel: '',
     };
   });
 }
@@ -1350,22 +1343,14 @@ function normalizeTimelineEntries(entries) {
 function diaryFromApi(diary) {
   if (!diary) return null;
   const timeline = Array.isArray(diary.timeline) ? diary.timeline : [];
-  const dayIndexByDate = new Map();
-  let nextDayIndex = 1;
   return timeline.map((entry, index) => {
     const entryDate = new Date(entry.time);
-    const dateKey = getLocalDateKey(entryDate);
-    if (!dayIndexByDate.has(dateKey)) {
-      dayIndexByDate.set(dateKey, nextDayIndex);
-      nextDayIndex += 1;
-    }
-    const dayIndex = dayIndexByDate.get(dateKey);
     return {
       photoId: diary.selected_photos?.[index]?.photo_id || entry.photo_url || index,
       photoIds: diary.selected_photos?.slice(index, index + 3).map((photo) => photo.photo_id) || [],
       time: formatRoundedTimeLabel(entryDate),
       dateLabel: `${formatMonthDay(entryDate)} · ${diary.title || state.trip.title || '여행'}`,
-      dayLabel: `${dayIndex}일차`,
+      dayLabel: '',
       place: entry.place,
       note: entry.note,
       photoCount: diary.selected_photos?.length || 0,
@@ -1607,7 +1592,7 @@ async function generateDiaryFromFiles(files) {
       photoIds: selectedPhotos.map((photo) => photo.id),
       time: timeLabel,
       dateLabel: `${formatMonthDay(firstPhoto.takenAt)} · ${tripName}`,
-      dayLabel: `${dayIndex}일차`,
+      dayLabel: '',
       place,
       note: `반경 ${PHOTO_SPOT_RADIUS_M}m 안에서 사진 ${photoCount}장을 기록했어요.`,
       photoCount,
@@ -1648,7 +1633,7 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
       const note = entry.note || '';
       const noteHtml = escapeHtml(note);
       const dateLabel = escapeHtml(entry.dateLabel || '');
-      const timeLabel = escapeHtml(entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time || '');
+      const timeLabel = escapeHtml(entry.time || '');
       const gallery = photoUrls.length
         ? `
           <div class="timeline-gallery timeline-gallery--${photoUrls.length}">
@@ -1670,7 +1655,7 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
           <div class="timeline-card">
             <div class="timeline-section">
               <p class="timeline-section-label">${entry.dateLabel || ''}</p>
-              <p class="timeline-section-time">${entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time}</p>
+              <p class="timeline-section-time">${entry.time}</p>
             </div>
             <div class="timeline-meta">
               <button class="timeline-button" type="button" data-view-map="${index}">지도에서 보기</button>
