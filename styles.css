@@ -1205,3 +1205,11 @@ textarea:focus-visible {
   color: #b3a49b;
   font-style: italic;
 }
+
+/* 추억 영상 버튼 */
+.status-pill--video {
+  background: rgba(255, 255, 255, 0.85);
+  color: #7a4a32;
+  cursor: pointer;
+}
+.status-pill--video:disabled { opacity: 0.55; cursor: wait; }

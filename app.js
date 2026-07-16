@@ -1,10 +1,10 @@
 const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
 const STORAGE_KEY = 'travel-diary.trips.v1';
 const API_BASE_URL = window.API_BASE_URL || '';
-const PHOTO_SPOT_RADIUS_M = 50;
+const PHOTO_SPOT_RADIUS_M = 120;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 2;
-const PHOTO_SPOT_GAP_MS = 10 * 60 * 1000;
+const PHOTO_SPOT_GAP_MS = 90 * 60 * 1000;
 const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
 const FOOTPRINT_MIN_GAP_MS = 15 * 1000;
@@ -103,6 +103,7 @@ const elements = {
   endRecording: document.getElementById('end-recording'),
   deleteDiaryButton: document.getElementById('delete-diary-button'),
   completeDiaryButton: document.getElementById('complete-diary-button'),
+  memoryVideoButton: document.getElementById('memory-video-button'),
   navButtons: Array.from(document.querySelectorAll('[data-nav]')),
   timeline: document.getElementById('timeline'),
   calendarModal: document.getElementById('calendar-modal'),
@@ -1186,11 +1187,9 @@ function buildClusters(photos, allowCrossDate = false) {
     const photoPoint = [photo.lng, photo.lat];
     const photoTime = photo.takenAt.getTime();
     const photoDateKey = getLocalDateKey(photo.takenAt);
-    const photoPlaceKey = `${photoDateKey}:${Math.round(photo.lat * 1000)}:${Math.round(photo.lng * 1000)}`;
     if (
       lastGroup &&
-      (allowCrossDate || lastGroup.dateKey === photoDateKey) &&
-      lastGroup.placeKey === photoPlaceKey
+      (allowCrossDate || lastGroup.dateKey === photoDateKey)
     ) {
       const gap = photoTime - lastGroup.lastTakenAt;
       const distanceToAnchor = distanceMeters(lastGroup.anchorCenter, photoPoint);
@@ -1216,7 +1215,6 @@ function buildClusters(photos, allowCrossDate = false) {
       firstTakenAt: photoTime,
       lastTakenAt: photoTime,
       dateKey: photoDateKey,
-      placeKey: photoPlaceKey,
     });
   }
   return groups;
@@ -2263,6 +2261,11 @@ function bootstrap() {
       showToast('다이어리를 닫았어요');
     });
   }
+  if (elements.memoryVideoButton) {
+    elements.memoryVideoButton.addEventListener('click', () => {
+      createMemoryVideo();
+    });
+  }
   if (elements.deleteDiaryButton) {
     elements.deleteDiaryButton.addEventListener('click', () => {
       const confirmed = window.confirm('다이어리 전체를 삭제하시겠습니까? 이 여행의 모든 기록이 지워집니다.');
@@ -2284,6 +2287,260 @@ function bootstrap() {
   restoreLastTrip().catch((error) => {
     console.error(error);
   });
+}
+
+// ============================================================
+// 추억 영상 만들기: 발자취 경로 위를 걸으며 사진이 순서대로 나오는
+// 세로형 영상을 캔버스로 그려 MediaRecorder 로 녹화 → 다운로드.
+// ============================================================
+
+function pickVideoMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const candidates = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || null;
+}
+
+function loadImageForCanvas(src) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+async function createMemoryVideo() {
+  const entries = (state.generatedDiary || []).filter((e) => Array.isArray(e.center));
+  if (!entries.length) {
+    showToast('먼저 사진으로 다이어리를 만들어 주세요.');
+    return;
+  }
+  const mime = pickVideoMime();
+  if (!mime || !HTMLCanvasElement.prototype.captureStream) {
+    showToast('이 브라우저는 영상 만들기를 지원하지 않아요.');
+    return;
+  }
+  if (!window.confirm('추억 영상을 만들어 다운로드할까요? (10초 정도 걸려요)')) return;
+
+  const button = elements.memoryVideoButton;
+  if (button) { button.disabled = true; button.textContent = '🎬 만드는 중…'; }
+  showToast('영상을 만드는 중이에요…');
+
+  try {
+    // 사진 미리 로드 (실패한 건 장소 카드로 대체)
+    const images = await Promise.all(
+      entries.map((e) => loadImageForCanvas(e.mainPhoto || (e.photoUrls && e.photoUrls[0]) || '')),
+    );
+
+    // 경로 좌표: GPS 샘플이 있으면 상세 경로, 없으면 스팟 좌표
+    const trip = getSelectedTrip();
+    const samples = trip?.recording?.samples || [];
+    const rawPath = samples.length >= 2
+      ? samples.map((s) => [s.lng, s.lat])
+      : entries.map((e) => e.center);
+
+    // 캔버스 좌표로 정규화 (하단 미니맵 영역)
+    const W = 720; const H = 1280;
+    const mapArea = { x: 70, y: 880, w: W - 140, h: 300 };
+    const lngs = rawPath.map((p) => p[0]);
+    const lats = rawPath.map((p) => p[1]);
+    const minLng = Math.min(...lngs); const maxLng = Math.max(...lngs);
+    const minLat = Math.min(...lats); const maxLat = Math.max(...lats);
+    const spanLng = Math.max(maxLng - minLng, 1e-6);
+    const spanLat = Math.max(maxLat - minLat, 1e-6);
+    const toXY = ([lng, lat]) => [
+      mapArea.x + ((lng - minLng) / spanLng) * mapArea.w,
+      mapArea.y + (1 - (lat - minLat) / spanLat) * mapArea.h,
+    ];
+    const path = rawPath.map(toXY);
+    const spotXY = entries.map((e) => toXY(e.center));
+
+    // 타임라인 구성: 인트로 → (걷기+사진)*n → 아웃트로
+    const segs = [{ type: 'intro', dur: 1800 }];
+    entries.forEach((e, i) => {
+      segs.push({ type: 'walk', dur: i === 0 ? 900 : 1300, idx: i });
+      segs.push({ type: 'photo', dur: 2400, idx: i });
+    });
+    segs.push({ type: 'outro', dur: 2000 });
+    const total = segs.reduce((a, s) => a + s.dur, 0);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    const stream = canvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const done = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.start();
+
+    const title = state.trip.title || '여행 다이어리';
+    const dateText = state.trip.date ? formatDateLabel(state.trip.date) : '';
+
+    const pathPointAt = (t) => {
+      // t: 0~1 → 경로 위 좌표
+      if (path.length === 1) return path[0];
+      const f = t * (path.length - 1);
+      const i = Math.min(Math.floor(f), path.length - 2);
+      const r = f - i;
+      return [path[i][0] + (path[i + 1][0] - path[i][0]) * r, path[i][1] + (path[i + 1][1] - path[i][1]) * r];
+    };
+    // 각 스팟의 경로상 위치(0~1): 스팟 순서대로 균등 배분
+    const spotT = entries.map((_, i) => (entries.length === 1 ? 1 : i / (entries.length - 1)));
+
+    const drawFrame = (elapsed) => {
+      // 배경
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, '#fdf6ee');
+      grad.addColorStop(1, '#f3e2d0');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // 제목
+      ctx.fillStyle = '#43312c';
+      ctx.font = '700 44px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(title, W / 2, 110);
+      ctx.font = '500 26px "Noto Sans KR", sans-serif';
+      ctx.fillStyle = '#8a7364';
+      if (dateText) ctx.fillText(dateText, W / 2, 155);
+
+      // 현재 세그먼트 찾기
+      let acc = 0; let seg = segs[segs.length - 1]; let segElapsed = 0;
+      for (const s of segs) {
+        if (elapsed < acc + s.dur) { seg = s; segElapsed = elapsed - acc; break; }
+        acc += s.dur;
+      }
+      const p = Math.min(1, segElapsed / seg.dur);
+
+      // 현재까지의 경로 진행률
+      let walkT = 0;
+      if (seg.type === 'intro') walkT = 0;
+      else if (seg.type === 'walk') {
+        const from = seg.idx === 0 ? 0 : spotT[seg.idx - 1];
+        walkT = from + (spotT[seg.idx] - from) * p;
+      } else if (seg.type === 'photo') walkT = spotT[seg.idx];
+      else walkT = 1;
+
+      // 미니맵: 전체 경로(연한 선) + 진행 경로(진한 선) + 스팟 점
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(160, 120, 95, 0.28)'; ctx.lineWidth = 6;
+      ctx.beginPath();
+      path.forEach((pt, i) => (i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1])));
+      ctx.stroke();
+
+      const upto = Math.max(2, Math.ceil(walkT * (path.length - 1)) + 1);
+      ctx.strokeStyle = '#c86f4f'; ctx.lineWidth = 7;
+      ctx.beginPath();
+      path.slice(0, upto).forEach((pt, i) => (i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1])));
+      ctx.stroke();
+
+      spotXY.forEach((pt, i) => {
+        ctx.fillStyle = spotT[i] <= walkT + 1e-6 ? '#c86f4f' : 'rgba(160,120,95,0.4)';
+        ctx.beginPath(); ctx.arc(pt[0], pt[1], 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.arc(pt[0], pt[1], 4, 0, Math.PI * 2); ctx.fill();
+      });
+
+      // 걷는 발자국
+      const cur = pathPointAt(walkT);
+      ctx.font = '34px serif';
+      ctx.fillText('🐾', cur[0], cur[1] - 14);
+
+      // 사진 카드 (photo 세그먼트: 페이드 인/아웃)
+      if (seg.type === 'photo') {
+        const e = entries[seg.idx];
+        const img = images[seg.idx];
+        const alpha = p < 0.15 ? p / 0.15 : p > 0.9 ? (1 - p) / 0.1 : 1;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+        const cw = 560; const chh = 560;
+        const cx = (W - cw) / 2; const cy = 230;
+        ctx.translate(cx + cw / 2, cy + chh / 2);
+        ctx.rotate((seg.idx % 2 === 0 ? -1 : 1) * 0.02);
+        ctx.translate(-(cx + cw / 2), -(cy + chh / 2));
+        ctx.shadowColor = 'rgba(70,45,30,0.3)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
+        ctx.fillStyle = '#fffdf9';
+        drawRoundedRect(ctx, cx, cy, cw, chh + 90, 22); ctx.fill();
+        ctx.shadowColor = 'transparent';
+        if (img) {
+          const s = Math.max(cw - 40, chh - 40);
+          const ratio = Math.max((cw - 40) / img.width, (chh - 40) / img.height);
+          const iw = img.width * ratio; const ih = img.height * ratio;
+          ctx.save();
+          drawRoundedRect(ctx, cx + 20, cy + 20, cw - 40, chh - 40, 14); ctx.clip();
+          ctx.drawImage(img, cx + 20 + (cw - 40 - iw) / 2, cy + 20 + (chh - 40 - ih) / 2, iw, ih);
+          ctx.restore();
+        } else {
+          ctx.fillStyle = '#f0e3d6';
+          drawRoundedRect(ctx, cx + 20, cy + 20, cw - 40, chh - 40, 14); ctx.fill();
+          ctx.fillStyle = '#a08a7a'; ctx.font = '600 30px "Noto Sans KR", sans-serif';
+          ctx.fillText('사진 없는 기록', W / 2, cy + chh / 2);
+        }
+        ctx.fillStyle = '#43312c'; ctx.font = '700 30px "Noto Sans KR", sans-serif';
+        const placeText = (e.place || '').split(',')[0];
+        ctx.fillText(placeText, W / 2, cy + chh + 42);
+        ctx.fillStyle = '#8a7364'; ctx.font = '500 24px "Noto Sans KR", sans-serif';
+        ctx.fillText(e.time || '', W / 2, cy + chh + 76);
+        ctx.restore();
+      }
+
+      if (seg.type === 'intro' || seg.type === 'outro') {
+        ctx.fillStyle = '#43312c';
+        ctx.font = '600 30px "Noto Sans KR", sans-serif';
+        ctx.fillText(seg.type === 'intro' ? '그날의 발자취를 따라' : '— 오늘의 여정 끝 —', W / 2, 520);
+        if (seg.type === 'outro') {
+          ctx.font = '500 24px "Noto Sans KR", sans-serif';
+          ctx.fillStyle = '#8a7364';
+          ctx.fillText(`${entries.length}곳의 기억 · Travel Diary`, W / 2, 565);
+        }
+      }
+    };
+
+    await new Promise((resolve) => {
+      const startAt = performance.now();
+      const tick = (now) => {
+        const elapsed = now - startAt;
+        drawFrame(Math.min(elapsed, total));
+        if (elapsed < total) requestAnimationFrame(tick);
+        else resolve();
+      };
+      requestAnimationFrame(tick);
+    });
+
+    recorder.stop();
+    await done;
+
+    const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(chunks, { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `travel-diary-${state.trip.date || 'memory'}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast('추억 영상을 다운로드했어요 🎬');
+  } catch (error) {
+    console.error(error);
+    showToast('영상 만들기에 실패했어요.');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = '🎬 영상'; }
+  }
 }
 
 window.addEventListener('beforeunload', cleanupGeneratedPhotoUrls);
