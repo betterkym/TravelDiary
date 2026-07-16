@@ -84,6 +84,8 @@ def generate(trip_id: str):
 def photo_feedback(trip_id: str, feedback: PhotoFeedback):
     _require_trip(trip_id)
     storage.save_photo_feedback(trip_id, feedback)
+    photos = storage.get_photos(trip_id)
+    storage.update_preference_profile_from_feedback(photos, feedback)
     return {"accepted_count": len(feedback.accepted_photo_ids), "rejected_count": len(feedback.rejected_photo_ids)}
 
 

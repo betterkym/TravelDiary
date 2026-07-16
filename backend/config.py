@@ -21,6 +21,8 @@ UPLOAD_DIR = BASE_DIR / os.getenv("UPLOAD_DIR", "uploads")
 OUTPUT_DIR = BASE_DIR / os.getenv("OUTPUT_DIR", "outputs")
 DATA_DIR = BASE_DIR / os.getenv("DATA_DIR", "data")
 DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "travel_diary.sqlite3")))
+DATABASE_URL = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL") or ""
+DB_BACKEND = "postgres" if DATABASE_URL else "sqlite"
 
 MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "30"))
 MAX_PHOTO_MB = int(os.getenv("MAX_PHOTO_MB", "15"))

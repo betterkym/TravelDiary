@@ -48,13 +48,19 @@ def select(
         reverse=True,
     )
 
+    selected_photos: list[Photo] = []
     selected: list[SelectedPhoto] = []
-    for photo, group_size in candidates[:max_count]:
+    for photo, group_size in candidates:
+        if _is_too_similar(photo, selected_photos):
+            continue
         selected.append(SelectedPhoto(
             photo_id=photo.photo_id,
             photo_url=f"/uploads/{photo.filename}",
             reason=_reason(photo, group_size),
         ))
+        selected_photos.append(photo)
+        if len(selected) >= max_count:
+            break
     return selected
 
 
@@ -85,5 +91,66 @@ def _rank_photo(photo: Photo, preference_profile: dict[str, float] | None) -> tu
         composition += preference_profile.get("composition_boost", 0.0) * composition
         face_hint += preference_profile.get("face_boost", 0.0) * face_hint
         resolution += preference_profile.get("resolution_boost", 0.0) * resolution
+        quality += preference_profile.get("exposure_boost", 0.0) * (photo.exposure_score or 0.0)
+        quality += preference_profile.get("backlight_boost", 0.0) * (photo.backlight_score or 0.0)
+        composition += preference_profile.get("saturation_boost", 0.0) * (photo.saturation_score or 0.0)
+        composition += preference_profile.get("edge_balance_boost", 0.0) * (photo.edge_balance_score or 0.0)
+        quality += preference_profile.get("person_boost", 0.0) * (photo.face_hint_score or 0.0)
+        composition += preference_profile.get("landscape_boost", 0.0) * _landscape_theme(photo)
+        composition += preference_profile.get("food_boost", 0.0) * _food_theme(photo)
 
     return (quality, composition, face_hint, resolution)
+
+
+def _is_too_similar(candidate: Photo, selected: list[Photo]) -> bool:
+    if not selected:
+        return False
+
+    for item in selected:
+        time_gap = None
+        if candidate.taken_at and item.taken_at:
+            time_gap = abs((candidate.taken_at - item.taken_at).total_seconds())
+        same_group = candidate.group_id and item.group_id and candidate.group_id == item.group_id
+        same_place = (
+            candidate.lat is not None
+            and candidate.lng is not None
+            and item.lat is not None
+            and item.lng is not None
+        )
+        close_place = False
+        if same_place:
+            from math import radians, sin, cos, asin, sqrt
+
+            lat1, lng1 = candidate.lat, candidate.lng
+            lat2, lng2 = item.lat, item.lng
+            r = 6_371_000
+            dlat = radians(lat2 - lat1)
+            dlng = radians(lng2 - lng1)
+            h = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+            close_place = 2 * r * asin(min(1, sqrt(h))) <= 40
+
+        if same_group:
+            return True
+        if time_gap is not None and time_gap <= 8 * 60 and close_place:
+            return True
+        if time_gap is not None and time_gap <= 2 * 60 and same_place:
+            return True
+    return False
+
+
+def _landscape_theme(photo: Photo) -> float:
+    face = photo.face_hint_score or 0.0
+    composition = photo.composition_score or 0.0
+    width = float(photo.width or 0)
+    height = float(photo.height or 0)
+    aspect = width / height if width and height else 1.0
+    return max(0.0, 1.0 - face) * (1.0 if aspect >= 1.1 else 0.6) * (0.5 + composition * 0.5)
+
+
+def _food_theme(photo: Photo) -> float:
+    face = photo.face_hint_score or 0.0
+    saturation = photo.saturation_score or 0.0
+    width = float(photo.width or 0)
+    height = float(photo.height or 0)
+    aspect = width / height if width and height else 1.0
+    return max(0.0, 1.0 - face) * (0.5 + saturation * 0.5) * (0.9 if 0.8 <= aspect <= 1.35 else 0.6)

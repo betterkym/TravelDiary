@@ -12,6 +12,7 @@ const FOOTPRINT_MIN_REPEAT_DISTANCE_M = 1;
 const CREATE_FORM_STORAGE_KEY = 'travel-diary:create-form';
 const LAST_TRIP_ID_STORAGE_KEY = 'travel-diary:last-trip-id';
 const LAST_DIARY_STORAGE_KEY = 'travel-diary:last-diary';
+const GA4_MEASUREMENT_ID = window.GA4_MEASUREMENT_ID || window.GA_MEASUREMENT_ID || '';
 
 const state = {
   screen: 'create',
@@ -41,6 +42,7 @@ const state = {
   activeTrip: null,
   calendarOpen: false,
   calendarMonth: null,
+  lastTrackedView: null,
   trip: {
     title: '',
     date: '2026-07-15',
@@ -270,6 +272,7 @@ function openCalendar() {
     : new Date();
   state.calendarMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   state.calendarOpen = true;
+  trackGaEvent('calendar_open');
   if (elements.calendarModal) {
     elements.calendarModal.hidden = false;
   }
@@ -324,6 +327,9 @@ function renderCalendar() {
     if (trip) {
       button.addEventListener('click', () => {
         pickTrip(trip.id);
+        trackGaEvent('calendar_trip_open', {
+          trip_date: normalizeDateKey(trip.date),
+        });
         renderTripOnMap(trip);
         closeCalendar();
       });
@@ -894,10 +900,12 @@ function setScreen(screen) {
 
   if (screen === 'map') {
     initMapIfNeeded();
+    trackGaEvent('map_view');
     window.requestAnimationFrame(() => {
       if (state.map) state.map.resize();
     });
   }
+  trackGaPageView(screen);
 
   updateNavButtons();
 }
@@ -937,6 +945,21 @@ function showToast(message) {
   showToast.timer = window.setTimeout(() => {
     elements.toast.hidden = true;
   }, 1800);
+}
+
+function trackGaEvent(eventName, params = {}) {
+  if (!GA4_MEASUREMENT_ID || typeof window.gtag !== 'function') return;
+  window.gtag('event', eventName, params);
+}
+
+function trackGaPageView(viewName) {
+  if (!GA4_MEASUREMENT_ID || typeof window.gtag !== 'function') return;
+  if (state.lastTrackedView === viewName) return;
+  state.lastTrackedView = viewName;
+  window.gtag('event', 'page_view', {
+    page_title: `Travel Diary - ${viewName}`,
+    page_location: `${window.location.origin}${window.location.pathname}#${viewName}`,
+  });
 }
 
 function setUploadProgress(text, visible = true) {
@@ -1495,6 +1518,9 @@ async function generateDiaryFromBackend() {
   renderTripHistory();
   renderTimeline(state.generatedDiary);
   setScreen('diary');
+  trackGaEvent('ai_diary_generate', {
+    cluster_count: entries.length,
+  });
   showToast('AI가 위치별 대표 사진을 골라 다이어리를 만들었어요 ✨');
   return true;
 }
@@ -1818,6 +1844,7 @@ function createTrip() {
   setScreen('map');
   setMapState('before');
   renderTripOnMap(trip);
+  trackGaEvent('trip_save');
 
   fetch(buildApiUrl('/api/trips'), {
     method: 'POST',
@@ -1913,6 +1940,11 @@ async function handleLivePhotoCapture(files) {
     }
   }
   showToast('현장 사진을 지도에 추가했어요 📍');
+  if (files.length) {
+    trackGaEvent('field_photo_capture', {
+      photo_count: files.length,
+    });
+  }
 }
 
 function handleNav(target) {
@@ -1975,14 +2007,17 @@ async function uploadPhotosToApi(files) {
       setUploadProgress(`업로드 중 ${percent}%`, true);
     });
 
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        setUploadProgress('업로드 완료', true);
-        window.setTimeout(() => setUploadProgress('', false), 2000);
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch (error) {
-          reject(error);
+  xhr.addEventListener('load', () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      setUploadProgress('업로드 완료', true);
+      window.setTimeout(() => setUploadProgress('', false), 2000);
+      trackGaEvent('photo_upload', {
+        file_count: files.length,
+      });
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch (error) {
+        reject(error);
         }
         return;
       }
@@ -2074,6 +2109,9 @@ async function saveDiaryNote(entryIndex, note, entries) {
   try {
     await persistDiaryNoteToApi(entryIndex, nextNote);
     showToast('메모를 저장했어요.');
+    trackGaEvent('ai_diary_save', {
+      note_length: nextNote.length,
+    });
   } catch (error) {
     console.warn(error);
     showToast('메모를 이 기기에 저장했어요.');

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'travel-diary-cache-v5';
+const CACHE_NAME = 'travel-diary-cache-v7';
 const ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
-  '/app.js?v=20260716d',
+  '/app.js?v=20260716f',
   '/manifest.json',
 ];
 
