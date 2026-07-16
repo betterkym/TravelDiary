@@ -17,7 +17,7 @@ def test_build_merges_same_place_selected_photos_into_one_feed():
     base = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
     photos = [
         Photo(photo_id="1", filename="a.jpg", taken_at=base, lat=37.0, lng=127.0),
-        Photo(photo_id="2", filename="b.jpg", taken_at=base + timedelta(minutes=20), lat=37.0002, lng=127.0002),
+        Photo(photo_id="2", filename="b.jpg", taken_at=base + timedelta(seconds=90), lat=37.0002, lng=127.0002),
     ]
     selected = [
         SelectedPhoto(photo_id="1", photo_url="/uploads/a.jpg"),
@@ -32,11 +32,27 @@ def test_build_merges_same_place_selected_photos_into_one_feed():
     assert entries[0].photo_ids == ["1", "2"]
 
 
+def test_build_splits_same_place_when_time_gap_exceeds_two_minutes():
+    base = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    photos = [
+        Photo(photo_id="1", filename="a.jpg", taken_at=base, lat=37.0, lng=127.0),
+        Photo(photo_id="2", filename="b.jpg", taken_at=base + timedelta(minutes=3), lat=37.0002, lng=127.0002),
+    ]
+    selected = [
+        SelectedPhoto(photo_id="1", photo_url="/uploads/a.jpg"),
+        SelectedPhoto(photo_id="2", photo_url="/uploads/b.jpg"),
+    ]
+
+    entries = timeline.build(Route(), selected, photos)
+
+    assert len(entries) == 2
+
+
 def test_build_keeps_far_places_as_separate_feeds():
     base = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
     photos = [
         Photo(photo_id="1", filename="a.jpg", taken_at=base, lat=37.0, lng=127.0),
-        Photo(photo_id="2", filename="b.jpg", taken_at=base + timedelta(minutes=20), lat=37.01, lng=127.01),
+        Photo(photo_id="2", filename="b.jpg", taken_at=base + timedelta(seconds=90), lat=37.01, lng=127.01),
     ]
     selected = [
         SelectedPhoto(photo_id="1", photo_url="/uploads/a.jpg"),

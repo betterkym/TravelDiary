@@ -1,7 +1,7 @@
 """사진 그룹핑. (소유: 4번 사진 분석·선별)
 
-같은 "장소(스팟)"의 사진을 한 그룹으로 묶어 그룹당 1장만 대표로 남깁니다.
-- GPS 가 있으면: 위치 근접(반경 기준)으로 묶음 → 같은 장소면 구도가 달라도 한 피드.
+같은 "장소(스팟)"의 사진을 한 그룹으로 묶습니다.
+- GPS 가 있으면: 첫 사진 기준 100m 안이고 촬영 간격이 2분 이내면 같은 피드.
 - GPS 가 없으면: 유사사진 해시(연속 촬영)로 묶음.
 """
 from __future__ import annotations
@@ -16,30 +16,38 @@ from ..models import Photo
 
 _HASH_SIZE = 8
 _MAX_HAMMING = 10
-_SPOT_RADIUS_M = 150.0   # 이 반경 안의 사진은 "같은 장소"로 보고 한 그룹으로 묶음
+_SPOT_RADIUS_M = 100.0
+_MAX_GROUP_GAP_SEC = 2 * 60
 
 
 def group(photos: list[Photo], paths: dict[str, Path]) -> list[Photo]:
     """같은 장소(또는 유사 연속샷) 사진에 같은 group_id 를 부여."""
-    location_anchors: list[tuple[str, float, float]] = []  # (gid, lat, lng)
-    hash_reps: list[tuple[str, int]] = []                  # (gid, hash)
+    location_anchors: list[dict] = []
+    hash_reps: list[dict] = []
     next_group = 0
 
-    for p in photos:
-        # 1) 위치가 있으면 근접한 기존 스팟에 합류, 없으면 새 스팟
+    for p in sorted(photos, key=_sort_key):
+        # 1) 위치가 있으면 첫 사진 위치와 촬영 간격 기준으로 합류, 없으면 새 스팟
         if p.lat is not None and p.lng is not None:
-            matched = None
-            for gid, alat, alng in location_anchors:
-                if _haversine_m(p.lat, p.lng, alat, alng) <= _SPOT_RADIUS_M:
-                    matched = gid
+            matched: dict | None = None
+            for anchor in location_anchors:
+                if _can_join_location_group(p, anchor):
+                    matched = anchor
                     break
             if matched is None:
                 gid = f"s{next_group}"
                 next_group += 1
-                location_anchors.append((gid, p.lat, p.lng))
+                location_anchors.append({
+                    "gid": gid,
+                    "lat": p.lat,
+                    "lng": p.lng,
+                    "last_time": p.taken_at,
+                })
                 p.group_id = gid
             else:
-                p.group_id = matched
+                p.group_id = matched["gid"]
+                if p.taken_at:
+                    matched["last_time"] = p.taken_at
             continue
 
         # 2) 위치가 없으면 유사사진 해시로 묶음
@@ -48,20 +56,40 @@ def group(photos: list[Photo], paths: dict[str, Path]) -> list[Photo]:
             p.group_id = f"g{next_group}"
             next_group += 1
             continue
-        matched = None
-        for gid, rep_hash in hash_reps:
-            if _hamming(h, rep_hash) <= _MAX_HAMMING:
-                matched = gid
+        matched: dict | None = None
+        for rep in hash_reps:
+            if _hamming(h, rep["hash"]) <= _MAX_HAMMING and _within_gap(rep["last_time"], p.taken_at):
+                matched = rep
                 break
         if matched is None:
             gid = f"g{next_group}"
             next_group += 1
-            hash_reps.append((gid, h))
+            hash_reps.append({"gid": gid, "hash": h, "last_time": p.taken_at})
             p.group_id = gid
         else:
-            p.group_id = matched
+            p.group_id = matched["gid"]
+            if p.taken_at:
+                matched["last_time"] = p.taken_at
 
     return photos
+
+
+def _sort_key(photo: Photo) -> float:
+    if photo.taken_at:
+        return photo.taken_at.timestamp()
+    return float("inf")
+
+
+def _can_join_location_group(photo: Photo, anchor: dict) -> bool:
+    if not _within_gap(anchor.get("last_time"), photo.taken_at):
+        return False
+    return _haversine_m(photo.lat, photo.lng, anchor["lat"], anchor["lng"]) <= _SPOT_RADIUS_M
+
+
+def _within_gap(left, right) -> bool:
+    if left is None or right is None:
+        return True
+    return abs((right - left).total_seconds()) <= _MAX_GROUP_GAP_SEC
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

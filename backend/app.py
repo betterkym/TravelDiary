@@ -48,6 +48,7 @@ def list_trips():
     for item in storage.list_trips_with_diaries():
         diary = item["diary"]
         meta = item["meta"]
+        locations = storage.get_locations(item["trip_id"])
         first_entry_date = diary.timeline[0].time.date().isoformat() if diary.timeline else ""
         trips.append(
             {
@@ -56,6 +57,7 @@ def list_trips():
                 "date": meta.get("start_date") or first_entry_date,
                 "region": meta.get("region", ""),
                 "diary": diary,
+                "locations": _serialize_locations(locations),
             }
         )
     return {"trips": trips}
@@ -66,6 +68,12 @@ def add_locations(trip_id: str, batch: LocationBatch):
     _require_trip(trip_id)
     storage.add_locations(trip_id, batch.points)
     return {"count": len(storage.get_locations(trip_id))}
+
+
+@app.get("/api/trips/{trip_id}/locations")
+def list_locations(trip_id: str):
+    _require_trip(trip_id)
+    return {"locations": _serialize_locations(storage.get_locations(trip_id))}
 
 
 @app.post("/api/trips/{trip_id}/photos")
@@ -139,6 +147,18 @@ def latest_trip():
     if trip_id is None:
         raise HTTPException(404, "저장된 여행이 없습니다.")
     return {"trip_id": trip_id}
+
+
+def _serialize_locations(points):
+    return [
+        {
+            "lat": point.lat,
+            "lng": point.lng,
+            "time": point.time.isoformat(),
+            "accuracy_m": point.accuracy_m,
+        }
+        for point in points
+    ]
 
 
 def _require_trip(trip_id: str) -> None:

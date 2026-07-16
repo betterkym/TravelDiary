@@ -1,12 +1,18 @@
 """대표사진 선별. (소유: 4번 사진 분석·선별)
 
-품질점수와 유사그룹을 바탕으로 대표사진을 최대 3장 고릅니다.
+품질점수와 유사그룹을 바탕으로 장소별 대표사진을 최대 3장 고릅니다.
 사진 파이프라인의 마지막 단계입니다: exif -> quality -> dedupe -> selector.
 """
 from __future__ import annotations
 
+from math import atan2, cos, radians, sin, sqrt
+
 from .. import config
 from ..models import Photo, SelectedPhoto
+
+_REPRESENTATIVE_PER_GROUP = 3
+_SIMILAR_TIME_GAP_SEC = 15
+_SIMILAR_DISTANCE_M = 8.0
 
 
 def select(
@@ -14,7 +20,7 @@ def select(
     max_count: int = config.MAX_SELECTED_PHOTOS,
     preference_profile: dict[str, float] | None = None,
 ) -> list[SelectedPhoto]:
-    """그룹별 최고 품질 1장 -> 품질순 상위 max_count 장 (선택 이유 포함)."""
+    """그룹별 대표사진 최대 3장 -> 품질순 상위 max_count 장 (선택 이유 포함)."""
     if not photos:
         return []
 
@@ -24,23 +30,27 @@ def select(
         key = p.group_id or f"__solo_{i}"
         groups.setdefault(key, []).append(p)
 
-    # 2) 그룹마다 품질 최고 1장을 대표 후보로
+    # 2) 그룹마다 품질 높은 컷을 최대 3장까지 대표 후보로
     #    - 흔들림/노출 등으로 rejected 된 사진은 제외.
     #    - 단, 그룹 전체가 rejected 면 그중 최고라도 남긴다(빈 자리 방지).
     candidates: list[tuple[Photo, int]] = []  # (사진, 그룹 크기)
     for members in groups.values():
         usable = [m for m in members if not getattr(m, "rejected", False)]
         pool = usable or members
-        best = max(
+        ranked = sorted(
             pool,
-            key=lambda p: (
-                p.quality_score or 0.0,
-                p.composition_score or 0.0,
-                p.face_hint_score or 0.0,
-                p.resolution_score or 0.0,
-            ),
+            key=lambda p: _rank_photo(p, preference_profile),
+            reverse=True,
         )
-        candidates.append((best, len(members)))
+        picked: list[Photo] = []
+        for photo in ranked:
+            if any(_too_similar(photo, selected) for selected in picked):
+                continue
+            picked.append(photo)
+            if len(picked) >= _REPRESENTATIVE_PER_GROUP:
+                break
+
+        candidates.extend((photo, len(members)) for photo in picked)
 
     # 3) 품질순 정렬 후 상위 max_count 장
     candidates.sort(
@@ -87,3 +97,25 @@ def _rank_photo(photo: Photo, preference_profile: dict[str, float] | None) -> tu
         resolution += preference_profile.get("resolution_boost", 0.0) * resolution
 
     return (quality, composition, face_hint, resolution)
+
+
+def _too_similar(left: Photo, right: Photo) -> bool:
+    if left.taken_at and right.taken_at:
+        gap = abs((left.taken_at - right.taken_at).total_seconds())
+        if gap > _SIMILAR_TIME_GAP_SEC:
+            return False
+    else:
+        return False
+
+    if left.lat is None or left.lng is None or right.lat is None or right.lng is None:
+        return True
+
+    return _haversine_m(left.lat, left.lng, right.lat, right.lng) <= _SIMILAR_DISTANCE_M
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    r = 6_371_000
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    h = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return 2 * r * atan2(sqrt(h), sqrt(1 - h))

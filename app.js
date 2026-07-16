@@ -5,10 +5,11 @@ const TRIP_DB_VERSION = 1;
 const TRIP_DB_STORE = 'state';
 const TRIP_DB_KEY = 'trips';
 const API_BASE_URL = window.API_BASE_URL || '';
-const PHOTO_SPOT_RADIUS_M = 120;
-const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
-const PHOTO_SPOT_MIN_COUNT = 2;
-const PHOTO_SPOT_GAP_MS = 90 * 60 * 1000;
+const PHOTO_SPOT_RADIUS_M = 100;
+const PHOTO_SPOT_GAP_MS = 2 * 60 * 1000;
+const REPRESENTATIVE_PHOTOS_PER_SPOT = 3;
+const SIMILAR_PHOTO_GAP_MS = 15 * 1000;
+const SIMILAR_PHOTO_DISTANCE_M = 8;
 const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
 const PHOTO_LOCATION_MATCH_WINDOW_MS = 30 * 60 * 1000;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
@@ -36,6 +37,8 @@ const state = {
   currentMarker: null,
   footprintMarkers: [],
   routeLine: null,
+  pendingRouteCoordinates: null,
+  routeRenderQueued: false,
   locationSamples: [],
   lastFootprintAt: 0,
   lastFootprintLngLat: null,
@@ -552,6 +555,33 @@ function createTripRecord(trip) {
   };
 }
 
+function hasRouteRecording(recording) {
+  return Boolean(
+    recording &&
+      (
+        (Array.isArray(recording.samples) && recording.samples.length) ||
+        (Array.isArray(recording.footprints) && recording.footprints.length)
+      ),
+  );
+}
+
+function mergeTripRecord(existing, incoming) {
+  if (!existing) return incoming;
+  const shouldKeepExistingRoute = incoming.status === 'completed' &&
+    !hasRouteRecording(incoming.recording) &&
+    hasRouteRecording(existing.recording);
+  const shouldKeepExistingFeedback =
+    !(incoming.feedback?.acceptedPhotoIds?.length || incoming.feedback?.rejectedPhotoIds?.length) &&
+    (existing.feedback?.acceptedPhotoIds?.length || existing.feedback?.rejectedPhotoIds?.length);
+
+  return {
+    ...existing,
+    ...incoming,
+    recording: shouldKeepExistingRoute ? existing.recording : incoming.recording,
+    feedback: shouldKeepExistingFeedback ? existing.feedback : incoming.feedback,
+  };
+}
+
 function upsertSavedTrip(trip) {
   const record = createTripRecord(trip);
   const dateKey = normalizeDateKey(record.date);
@@ -559,7 +589,7 @@ function upsertSavedTrip(trip) {
     (item) => item.id === record.id || normalizeDateKey(item.date) === dateKey,
   );
   if (index >= 0) {
-    state.savedTrips[index] = record;
+    state.savedTrips[index] = mergeTripRecord(state.savedTrips[index], record);
   } else {
     state.savedTrips.unshift(record);
   }
@@ -885,7 +915,8 @@ function centerMapOn(lngLat, zoom = 15.5) {
 }
 
 function ensureRouteLayer() {
-  if (!state.map || state.map.getSource('trip-route-source')) return;
+  if (!state.map || !state.map.isStyleLoaded()) return false;
+  if (state.map.getSource('trip-route-source')) return true;
   state.map.addSource('trip-route-source', {
     type: 'geojson',
     data: {
@@ -907,11 +938,26 @@ function ensureRouteLayer() {
       'line-opacity': 0.92,
     },
   });
+  return true;
 }
 
 function setRouteLine(coordinates) {
-  if (!state.map || !state.map.getSource('trip-route-source')) return;
-  state.map.getSource('trip-route-source').setData({
+  if (!state.map) return;
+  state.pendingRouteCoordinates = coordinates;
+  if (!state.map.isStyleLoaded()) {
+    if (!state.routeRenderQueued) {
+      state.routeRenderQueued = true;
+      state.map.once('idle', () => {
+        state.routeRenderQueued = false;
+        setRouteLine(state.pendingRouteCoordinates || []);
+      });
+    }
+    return;
+  }
+  if (!ensureRouteLayer()) return;
+  const source = state.map.getSource('trip-route-source');
+  if (!source) return;
+  source.setData({
     type: 'Feature',
     geometry: {
       type: 'LineString',
@@ -1526,6 +1572,68 @@ function buildClusters(photos, allowCrossDate = false) {
   return groups;
 }
 
+function getPhotoPreferenceWeight(photo) {
+  const id = String(photo?.id ?? '');
+  if (state.acceptedPhotoIds.has(id)) return 2;
+  if (state.rejectedPhotoIds.has(id)) return -1;
+  return 0;
+}
+
+function getPhotoTimeValue(photo) {
+  const time = photo?.takenAt instanceof Date ? photo.takenAt.getTime() : new Date(photo?.takenAt || 0).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function getPhotoStableId(photo, index = 0) {
+  return String(photo?.id || photo?.photo_id || photo?.fileName || `${getPhotoTimeValue(photo) || 'photo'}_${index}`);
+}
+
+function arePhotosTooSimilar(left, right) {
+  const leftTime = getPhotoTimeValue(left);
+  const rightTime = getPhotoTimeValue(right);
+  if (leftTime === null || rightTime === null) return false;
+  if (Math.abs(leftTime - rightTime) > SIMILAR_PHOTO_GAP_MS) return false;
+
+  const hasBothLocations = Number.isFinite(left?.lat) &&
+    Number.isFinite(left?.lng) &&
+    Number.isFinite(right?.lat) &&
+    Number.isFinite(right?.lng);
+  if (!hasBothLocations) return true;
+
+  return distanceMeters([left.lng, left.lat], [right.lng, right.lat]) <= SIMILAR_PHOTO_DISTANCE_M;
+}
+
+function selectRepresentativePhotos(photos, maxCount = REPRESENTATIVE_PHOTOS_PER_SPOT) {
+  const ranked = photos
+    .map((photo, index) => ({ photo, index }))
+    .sort((a, b) => {
+      const preferenceDiff = getPhotoPreferenceWeight(b.photo) - getPhotoPreferenceWeight(a.photo);
+      if (preferenceDiff) return preferenceDiff;
+      const imageDiff = Number(Boolean(b.photo.url || b.photo.dataUrl)) - Number(Boolean(a.photo.url || a.photo.dataUrl));
+      if (imageDiff) return imageDiff;
+      return a.index - b.index;
+    });
+
+  const selected = [];
+  const selectedIds = new Set();
+  const pick = (items, enforceSimilarity = true) => {
+    for (const { photo, index } of items) {
+      if (selected.length >= maxCount) return;
+      const id = getPhotoStableId(photo, index);
+      if (selectedIds.has(id)) continue;
+      if (enforceSimilarity && selected.some((chosen) => arePhotosTooSimilar(chosen, photo))) continue;
+      selected.push(photo);
+      selectedIds.add(id);
+    }
+  };
+
+  const preferred = ranked.filter(({ photo }) => getPhotoPreferenceWeight(photo) >= 0);
+  const rejected = ranked.filter(({ photo }) => getPhotoPreferenceWeight(photo) < 0);
+  pick(preferred, true);
+  pick(rejected, true);
+  return selected;
+}
+
 async function resolvePlaceName(lng, lat, fallbackLabel) {
   if (!MAPBOX_ACCESS_TOKEN) return fallbackLabel;
   try {
@@ -1659,8 +1767,7 @@ function formatRoundedTimeLabel(date) {
   const minute = rounded.getMinutes();
   const period = hour >= 12 ? '오후' : '오전';
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
-  const minuteText = minute === 0 ? '정각' : '30분';
-  return `${period} ${displayHour}시 ${minuteText}`;
+  return minute === 0 ? `${period} ${displayHour}시` : `${period} ${displayHour}시 30분`;
 }
 
 function formatMonthDay(date) {
@@ -1722,7 +1829,6 @@ function diaryFromApi(diary) {
       photoIds: getEntryPhotoIds(entry, diary, index, photoCount),
       time: formatRoundedTimeLabel(entryDate),
       dateLabel: `${formatMonthDay(entryDate)} · ${diary.title || state.trip.title || '여행'}`,
-      dayLabel: `${index + 1}일차`,
       place: entry.place,
       note: entry.note,
       photoCount,
@@ -1732,6 +1838,82 @@ function diaryFromApi(diary) {
       durationMinutes: null,
     };
   });
+}
+
+function locationSamplesFromApi(locations = []) {
+  return (Array.isArray(locations) ? locations : [])
+    .map((point) => {
+      const timestamp = new Date(point.time || point.timestamp || point.takenAt || 0).getTime();
+      return {
+        lng: Number(point.lng),
+        lat: Number(point.lat),
+        timestamp,
+      };
+    })
+    .filter((point) =>
+      Number.isFinite(point.lng) &&
+      Number.isFinite(point.lat) &&
+      Number.isFinite(point.timestamp),
+    )
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function buildFootprintsFromSamples(samples) {
+  const footprints = [];
+  let lastLngLat = null;
+  let lastTimestamp = 0;
+  samples.forEach((sample) => {
+    const lngLat = [sample.lng, sample.lat];
+    const distanceFromLast = lastLngLat ? distanceMeters(lastLngLat, lngLat) : Infinity;
+    const timeSinceLast = sample.timestamp - lastTimestamp;
+    const shouldDrop =
+      !lastLngLat ||
+      (timeSinceLast >= FOOTPRINT_MIN_GAP_MS && distanceFromLast > FOOTPRINT_MIN_REPEAT_DISTANCE_M);
+    if (!shouldDrop) return;
+    footprints.push({
+      lng: sample.lng,
+      lat: sample.lat,
+      timestamp: sample.timestamp,
+    });
+    lastLngLat = lngLat;
+    lastTimestamp = sample.timestamp;
+  });
+  return footprints;
+}
+
+function buildRecordingFromLocations(locations = []) {
+  const samples = locationSamplesFromApi(locations);
+  const first = samples[0] || null;
+  const last = samples[samples.length - 1] || null;
+  return {
+    startedAt: first ? new Date(first.timestamp).toISOString() : null,
+    endedAt: last ? new Date(last.timestamp).toISOString() : null,
+    elapsed: first && last ? Math.max(0, Math.round((last.timestamp - first.timestamp) / 1000)) : 0,
+    samples,
+    footprints: buildFootprintsFromSamples(samples),
+    livePhotos: [],
+  };
+}
+
+function buildRecordingFromPhotoFallback(photos = []) {
+  const samples = photos
+    .filter((photo) => Number.isFinite(photo.lng) && Number.isFinite(photo.lat))
+    .map((photo) => ({
+      lng: photo.lng,
+      lat: photo.lat,
+      timestamp: new Date(photo.takenAt || Date.now()).getTime(),
+    }))
+    .filter((sample) => Number.isFinite(sample.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  return {
+    startedAt: samples[0] ? new Date(samples[0].timestamp).toISOString() : null,
+    endedAt: samples[samples.length - 1] ? new Date(samples[samples.length - 1].timestamp).toISOString() : null,
+    elapsed: samples.length > 1 ? Math.max(0, Math.round((samples[samples.length - 1].timestamp - samples[0].timestamp) / 1000)) : 0,
+    samples,
+    footprints: buildFootprintsFromSamples(samples),
+    livePhotos: [],
+  };
 }
 
 function savedTripFromServer(item) {
@@ -1757,6 +1939,9 @@ function savedTripFromServer(item) {
       lng: entry.center[0],
       lat: entry.center[1],
     }));
+  const serverRecording = buildRecordingFromLocations(item.locations || []);
+  const fallbackRecording = buildRecordingFromPhotoFallback(photos);
+  const recording = hasRouteRecording(serverRecording) ? serverRecording : fallbackRecording;
 
   return {
     id: item.trip_id,
@@ -1765,19 +1950,13 @@ function savedTripFromServer(item) {
     region: item.region || '미정 지역',
     createdAt: firstTimestamp ? firstTimestamp.toISOString() : new Date().toISOString(),
     status: 'completed',
-    recording: {
-      startedAt: null,
-      endedAt: null,
-      elapsed: 0,
-      samples: [],
-      footprints: photos.map((photo) => ({
-        lng: photo.lng,
-        lat: photo.lat,
-        timestamp: new Date(photo.takenAt).getTime(),
-      })),
-    },
+    recording,
     diary: entries,
     photos,
+    feedback: {
+      acceptedPhotoIds: [],
+      rejectedPhotoIds: [],
+    },
   };
 }
 
@@ -1825,9 +2004,10 @@ async function restoreLastTrip() {
   if (!tripId) return false;
 
   try {
-    const [diaryResponse, photosResponse] = await Promise.all([
+    const [diaryResponse, photosResponse, locationsResponse] = await Promise.all([
       fetch(buildApiUrl(`/api/trips/${tripId}/diary`)),
       fetch(buildApiUrl(`/api/trips/${tripId}/photos`)),
+      fetch(buildApiUrl(`/api/trips/${tripId}/locations`)),
     ]);
     if (!diaryResponse.ok) return false;
 
@@ -1836,6 +2016,7 @@ async function restoreLastTrip() {
     if (!restoredEntries?.length) return false;
 
     let restoredPhotoCount = 0;
+    let restoredPhotoRecords = [];
     if (photosResponse.ok) {
       const photosPayload = await photosResponse.json();
       const restoredPhotos = Array.isArray(photosPayload?.photos) ? photosPayload.photos : [];
@@ -1843,15 +2024,52 @@ async function restoreLastTrip() {
       state.photoUrls = restoredPhotos
         .map((photo) => photo?.filename ? buildApiUrl(`/uploads/${photo.filename}`) : null)
         .filter(Boolean);
+      restoredPhotoRecords = restoredPhotos.map((photo, index) => ({
+        id: String(photo.photo_id || `${tripId}_photo_${index}`),
+        fileName: photo.filename || '',
+        url: photo.filename ? buildApiUrl(`/uploads/${photo.filename}`) : '',
+        takenAt: photo.taken_at || new Date().toISOString(),
+        lat: Number.isFinite(photo.lat) ? photo.lat : null,
+        lng: Number.isFinite(photo.lng) ? photo.lng : null,
+      }));
     }
 
+    let restoredLocations = [];
+    if (locationsResponse.ok) {
+      const locationsPayload = await locationsResponse.json();
+      restoredLocations = Array.isArray(locationsPayload?.locations) ? locationsPayload.locations : [];
+    }
+    const serverRecording = buildRecordingFromLocations(restoredLocations);
+    const fallbackRecording = buildRecordingFromPhotoFallback(restoredPhotoRecords);
+    const recording = hasRouteRecording(serverRecording) ? serverRecording : fallbackRecording;
+    const restoredTrip = {
+      id: tripId,
+      title: diary.title || state.trip.title || '여행 다이어리',
+      date: normalizeDateKey(state.trip.date || diary.timeline?.[0]?.time || new Date()),
+      region: state.trip.region || '미정 지역',
+      createdAt: recording.startedAt || new Date().toISOString(),
+      status: 'completed',
+      recording,
+      diary: restoredEntries,
+      photos: restoredPhotoRecords,
+      feedback: {
+        acceptedPhotoIds: Array.from(state.acceptedPhotoIds),
+        rejectedPhotoIds: Array.from(state.rejectedPhotoIds),
+      },
+    };
+    upsertSavedTrip(restoredTrip);
+
     state.tripId = tripId;
+    state.selectedTripId = tripId;
+    state.activeTripId = tripId;
+    state.activeTrip = restoredTrip;
+    state.locationSamples = recording.samples;
     state.generatedDiary = restoredEntries;
     state.diaryUnlocked = true;
     state.trip = {
-      title: diary.title || state.trip.title,
-      date: state.trip.date,
-      region: state.trip.region,
+      title: restoredTrip.title,
+      date: restoredTrip.date,
+      region: restoredTrip.region,
     };
     updateTripTexts();
     updateNavButtons();
@@ -2031,18 +2249,16 @@ async function generateDiaryFromPhotoData(parsed) {
     const firstPhoto = cluster.photos[0];
     const durationMinutes = Math.max(1, Math.round((cluster.lastTakenAt - cluster.firstTakenAt) / 60000));
     const timeLabel = formatRoundedTimeLabel(firstPhoto.takenAt);
-    const dayIndex = i + 1;
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.slice(0, 3).map((photo) => photo.url || photo.dataUrl);
-    const selectedPhotos = cluster.photos.slice(0, 3);
+    const selectedPhotos = selectRepresentativePhotos(cluster.photos);
+    const photoUrls = selectedPhotos.map((photo) => photo.url || photo.dataUrl).filter(Boolean);
     entries.push({
-      photoId: selectedPhotos[0].id,
+      photoId: selectedPhotos[0]?.id || firstPhoto.id,
       photoIds: selectedPhotos.map((photo) => photo.id),
       time: timeLabel,
       dateLabel: `${formatMonthDay(firstPhoto.takenAt)} · ${tripName}`,
-      dayLabel: `${dayIndex}일차`,
       place,
       note: makeDraftNote({ place, timestamp: firstPhoto.takenAt, durationMinutes, photoCount }),
       photoCount,
@@ -2147,12 +2363,12 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
   const isSampleTimeline = entries === state.sampleTimeline;
   elements.timeline.innerHTML = entries
     .map((entry, index) => {
-      const photoUrls = Array.isArray(entry.photoUrls) ? entry.photoUrls.slice(0, 3) : [];
+      const photoUrls = Array.isArray(entry.photoUrls) ? entry.photoUrls.slice(0, REPRESENTATIVE_PHOTOS_PER_SPOT) : [];
       const place = escapeHtml(entry.place || '기록 스팟');
       const note = entry.note || '';
       const noteHtml = escapeHtml(note);
       const dateLabel = escapeHtml(entry.dateLabel || '');
-      const timeLabel = escapeHtml(entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time || '');
+      const timeLabel = escapeHtml(entry.time || '');
       const gallery = photoUrls.length
         ? `
           <div class="timeline-gallery timeline-gallery--${photoUrls.length}">

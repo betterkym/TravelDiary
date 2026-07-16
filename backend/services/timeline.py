@@ -10,8 +10,8 @@ from math import atan2, cos, radians, sin, sqrt
 from ..models import Photo, Route, SelectedPhoto, Stop, TimelineEntry
 
 _NEAR_STOP_M = 200.0   # 사진이 이 거리 안이면 해당 정차 지점 이름을 붙임
-_SAME_FEED_RADIUS_M = 120.0
-_SAME_FEED_MAX_GAP_SEC = 90 * 60
+_SAME_FEED_RADIUS_M = 100.0
+_SAME_FEED_MAX_GAP_SEC = 2 * 60
 
 
 def build(
@@ -70,6 +70,8 @@ def _new_group(sp: SelectedPhoto, photo: Photo | None) -> dict:
         "items": [(sp, photo)],
         "first_time": photo.taken_at if photo and photo.taken_at else None,
         "last_time": photo.taken_at if photo and photo.taken_at else None,
+        "anchor_lat": float(photo.lat) if has_location else None,
+        "anchor_lng": float(photo.lng) if has_location else None,
         "lat": float(photo.lat) if has_location else None,
         "lng": float(photo.lng) if has_location else None,
         "located_count": 1 if has_location else 0,
@@ -102,7 +104,9 @@ def _find_merge_target(groups: list[dict], photo: Photo | None) -> dict | None:
 
 
 def _can_merge(group: dict, photo: Photo) -> bool:
-    if group["lat"] is None or group["lng"] is None or photo.lat is None or photo.lng is None:
+    anchor_lat = group.get("anchor_lat")
+    anchor_lng = group.get("anchor_lng")
+    if anchor_lat is None or anchor_lng is None or photo.lat is None or photo.lng is None:
         return False
 
     if group["last_time"] and photo.taken_at:
@@ -112,7 +116,7 @@ def _can_merge(group: dict, photo: Photo) -> bool:
         if gap > _SAME_FEED_MAX_GAP_SEC:
             return False
 
-    distance = _haversine_m(float(photo.lat), float(photo.lng), group["lat"], group["lng"])
+    distance = _haversine_m(float(photo.lat), float(photo.lng), anchor_lat, anchor_lng)
     return distance <= _SAME_FEED_RADIUS_M
 
 

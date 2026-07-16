@@ -47,6 +47,10 @@ def test_full_flow_returns_diary_shape():
     assert r.status_code == 200
     assert r.json()["trip_id"] == trip_id
 
+    r = client.get(f"/api/trips/{trip_id}/locations")
+    assert r.status_code == 200
+    assert len(r.json()["locations"]) == 2
+
 
 def test_generate_prefers_photo_gps_over_manual_locations():
     r = client.post(
@@ -151,6 +155,7 @@ def test_list_trips_returns_saved_diaries_for_calendar_sync():
         assert trip_id in trips_by_id
         assert trips_by_id[trip_id]["date"] == start_date
         assert trips_by_id[trip_id]["diary"]["timeline"]
+        assert len(trips_by_id[trip_id]["locations"]) == 2
 
 
 def test_unknown_trip_404():
