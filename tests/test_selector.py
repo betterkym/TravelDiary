@@ -42,3 +42,16 @@ def test_select_excludes_too_similar_representatives():
     out = selector.select(photos, max_count=8)
 
     assert [item.photo_id for item in out] == ["1", "3"]
+
+
+def test_select_excludes_copied_duplicate_filenames():
+    base = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    photos = [
+        Photo(photo_id="1", filename="IMG_0302.JPG", group_id="g1", quality_score=0.9, taken_at=base, lat=37.0, lng=127.0),
+        Photo(photo_id="2", filename="IMG_0302 2.JPG", group_id="g1", quality_score=0.8, taken_at=base + timedelta(seconds=45), lat=37.00001, lng=127.00001),
+        Photo(photo_id="3", filename="IMG_0303.JPG", group_id="g1", quality_score=0.7, taken_at=base + timedelta(seconds=90), lat=37.0004, lng=127.0004),
+    ]
+
+    out = selector.select(photos, max_count=8)
+
+    assert [item.photo_id for item in out] == ["1", "3"]

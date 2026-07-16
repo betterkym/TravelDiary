@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import re
 from math import atan2, cos, radians, sin, sqrt
+from pathlib import Path
 
 from .. import config
 from ..models import Photo, SelectedPhoto
@@ -100,6 +102,9 @@ def _rank_photo(photo: Photo, preference_profile: dict[str, float] | None) -> tu
 
 
 def _too_similar(left: Photo, right: Photo) -> bool:
+    if _same_duplicate_filename(left.filename, right.filename):
+        return True
+
     if left.taken_at and right.taken_at:
         gap = abs((left.taken_at - right.taken_at).total_seconds())
         if gap > _SIMILAR_TIME_GAP_SEC:
@@ -111,6 +116,26 @@ def _too_similar(left: Photo, right: Photo) -> bool:
         return True
 
     return _haversine_m(left.lat, left.lng, right.lat, right.lng) <= _SIMILAR_DISTANCE_M
+
+
+def _same_duplicate_filename(left: str, right: str) -> bool:
+    left_original, left_normalized = _normalize_duplicate_filename(left)
+    right_original, right_normalized = _normalize_duplicate_filename(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized != right_normalized:
+        return False
+    return left_original != left_normalized or right_original != right_normalized or left_original == right_original
+
+
+def _normalize_duplicate_filename(filename: str) -> tuple[str, str]:
+    original = Path(filename or "").name.strip().lower()
+    if not original:
+        return "", ""
+    normalized = re.sub(r"\s+\d+(?=\.[^.]+$)", "", original)
+    normalized = re.sub(r"\s*\(\d+\)(?=\.[^.]+$)", "", normalized)
+    normalized = re.sub(r"\s+copy(?=\.[^.]+$)", "", normalized)
+    return original, normalized
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

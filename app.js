@@ -1593,7 +1593,27 @@ function getPhotoStableId(photo, index = 0) {
   return String(photo?.id || photo?.photo_id || photo?.fileName || `${getPhotoTimeValue(photo) || 'photo'}_${index}`);
 }
 
+function normalizeDuplicateFileName(fileName) {
+  const original = String(fileName || '').split(/[\\/]/).pop().trim().toLowerCase();
+  if (!original) return { original: '', normalized: '', changed: false };
+  const normalized = original
+    .replace(/\s+\d+(?=\.[^.]+$)/, '')
+    .replace(/\s*\(\d+\)(?=\.[^.]+$)/, '')
+    .replace(/\s+copy(?=\.[^.]+$)/, '');
+  return { original, normalized, changed: normalized !== original };
+}
+
+function haveDuplicateFileNamePattern(left, right) {
+  const leftName = normalizeDuplicateFileName(left?.fileName || left?.filename || '');
+  const rightName = normalizeDuplicateFileName(right?.fileName || right?.filename || '');
+  if (!leftName.normalized || !rightName.normalized) return false;
+  return leftName.normalized === rightName.normalized &&
+    (leftName.changed || rightName.changed || leftName.original === rightName.original);
+}
+
 function arePhotosTooSimilar(left, right) {
+  if (haveDuplicateFileNamePattern(left, right)) return true;
+
   const leftTime = getPhotoTimeValue(left);
   const rightTime = getPhotoTimeValue(right);
   if (leftTime === null || rightTime === null) return false;
