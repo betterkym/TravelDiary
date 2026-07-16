@@ -1037,6 +1037,31 @@ function getSamplePoints(trip) {
     }));
 }
 
+function minDistanceToRoutePoints(lngLat, routePoints) {
+  if (!isValidLngLat(lngLat) || !routePoints.length) return Infinity;
+  return routePoints.reduce((best, point) => {
+    if (!isValidLngLat(point.lngLat)) return best;
+    return Math.min(best, distanceMeters(lngLat, point.lngLat));
+  }, Infinity);
+}
+
+function shouldUseSampleRoute(samplePoints, photoPoints) {
+  if (!samplePoints.length) return false;
+  if (!photoPoints.length) return true;
+  if (samplePoints.length < 2) return false;
+  const alignedCount = photoPoints.filter((point) =>
+    minDistanceToRoutePoints(point.lngLat, samplePoints) <= 250,
+  ).length;
+  return alignedCount >= Math.max(1, Math.ceil(photoPoints.length * 0.6));
+}
+
+function getDisplayRoutePoints(samplePoints, footprintPoints, photoPoints) {
+  if (shouldUseSampleRoute(samplePoints, photoPoints)) return samplePoints;
+  if (photoPoints.length) return photoPoints;
+  if (footprintPoints.length) return footprintPoints;
+  return samplePoints;
+}
+
 function getTripRouteFootprintPoints(trip) {
   return (trip?.recording?.footprints || [])
     .filter((point) => Number.isFinite(point.lng) && Number.isFinite(point.lat))
@@ -1063,10 +1088,14 @@ function renderTripOnMap(trip) {
   const samplePoints = getSamplePoints(trip);
   const footprintPoints = getTripRouteFootprintPoints(trip);
   const photoPoints = getTripPhotoMapPoints(trip);
-  const routePoints = samplePoints.length ? samplePoints : (footprintPoints.length ? footprintPoints : photoPoints);
+  const useRecordedRoute = shouldUseSampleRoute(samplePoints, photoPoints);
+  const routePoints = useRecordedRoute
+    ? samplePoints
+    : (photoPoints.length ? photoPoints : (footprintPoints.length ? footprintPoints : samplePoints));
+  const visibleFootprintPoints = useRecordedRoute || !photoPoints.length ? footprintPoints : [];
   setRouteLine(routePoints.map((point) => point.lngLat));
 
-  footprintPoints.forEach((point) => {
+  visibleFootprintPoints.forEach((point) => {
     addFootprint(point.lngLat, point.tip);
   });
 
@@ -1078,7 +1107,7 @@ function renderTripOnMap(trip) {
     }
   });
 
-  const last = getLastSamplePoint(samplePoints);
+  const last = useRecordedRoute ? getLastSamplePoint(samplePoints) : null;
   if (last) {
     ensureCurrentMarker(last.lngLat);
   }
@@ -2225,30 +2254,116 @@ function livePhotosAsPhotoData() {
     }));
 }
 
-// 장소·시각·머문시간 기반의 다이어리풍 메모 초안.
-// 안내 문구는 메모에 넣지 않는다 — 편집 UI에서 회색 힌트로 따로 보여준다.
-function makeDraftNote({ place, timestamp, durationMinutes }) {
-  const spot = (place || '이곳').split(',')[0].trim() || '이곳';
+function getDiaryTimePart(timestamp) {
   const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  const valid = !Number.isNaN(date.getTime());
-  const h = valid ? date.getHours() : null;
+  if (Number.isNaN(date.getTime())) return { part: '여행 중', timeText: '' };
+  const h = date.getHours();
   const part =
-    h === null ? '여행 중' :
     h < 5 ? '깊은 밤' :
     h < 11 ? '아침' :
     h < 15 ? '한낮' :
     h < 18 ? '오후' :
     h < 21 ? '저녁' : '밤';
-  const timeText = valid
-    ? new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' }).format(date)
-    : '';
-  const stay =
-    durationMinutes >= 60 ? `${Math.round(durationMinutes / 60)}시간 가까이 머물렀다` :
-    durationMinutes > 3 ? `${durationMinutes}분쯤 머물렀다` :
-    '잠시 걸음을 멈췄다';
-  return timeText
-    ? `${part}의 ${spot}, ${timeText}. ${stay}.`
-    : `${part}의 ${spot}. ${stay}.`;
+  return {
+    part,
+    timeText: new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' }).format(date),
+  };
+}
+
+function getStayPhrase(durationMinutes, photoCount = 1) {
+  const count = Number(photoCount) || 1;
+  if (durationMinutes >= 60) return `${Math.round(durationMinutes / 60)}시간 가까이 머문 자리`;
+  if (durationMinutes > 3) return `${durationMinutes}분쯤 머문 구간`;
+  if (count >= 3) return '짧은 시간에 여러 컷이 남은 지점';
+  if (count === 2) return '비슷한 컷을 묶어 대표 장면만 남긴 지점';
+  return '잠시 걸음을 멈춘 지점';
+}
+
+function classifyMemoScene(spot) {
+  const text = String(spot || '').toLowerCase();
+  if (/아이스크림|젤라토|디저트|빙수|ice ?cream|gelato|dessert/.test(text)) return 'dessert';
+  if (/카페|커피|cafe|coffee/.test(text)) return 'cafe';
+  if (/바다|해안|해변|항구|마르세유|beach|coast|ocean|sea|harbor|harbour/.test(text)) return 'coast';
+  if (/꽃|정원|공원|가로수|flower|garden|park/.test(text)) return 'flowers';
+  if (/호텔|레지나|야경|hotel|regina|night/.test(text)) return 'hotel';
+  if (/라운지|실내|로비|박물관|미술관|궁|lounge|lobby|museum|gallery|palace/.test(text)) return 'indoor';
+  if (/도심|거리|광장|골목|신호|시내|city|downtown|street|square/.test(text)) return 'city';
+  return 'generic';
+}
+
+function stableMemoIndex(parts, size) {
+  if (size <= 1) return 0;
+  const key = parts.filter(Boolean).join('|');
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return hash % size;
+}
+
+function buildSceneMemo({ scene, spot, part, timeText, stay, photoCount }) {
+  const prefix = timeText ? `${timeText}, ` : `${part}에 `;
+  const countText = photoCount >= 2 ? ' 대표 컷만 골라' : '';
+  const templates = {
+    city: [
+      `${prefix}${spot}의 큰길과 신호 앞에서 이동의 시작점이 남았다.`,
+      `${prefix}${spot}에서 도시의 흐름을 배경으로 첫 장면을 잡았다.`,
+      `${prefix}${spot} 주변의 길과 사람 흐름이 하루의 출발처럼 기록됐다.`,
+    ],
+    flowers: [
+      `${prefix}${spot}에서는 꽃과 골목의 색이 같이 남았다.`,
+      `${prefix}${spot} 옆을 지나며 거리의 색을${countText} 기록했다.`,
+      `${prefix}${spot}의 나무와 건물 사이로 걷던 장면이 정리됐다.`,
+    ],
+    cafe: [
+      `${prefix}${spot}에서 잠깐 앉아 커피와 쉬는 시간을 남겼다.`,
+      `${prefix}${spot} 안쪽의 테이블 컷을 묶어 쉬어 간 흔적으로 정리했다.`,
+      `${prefix}${spot}에서는 이동 사이의 짧은 휴식이 중심이 됐다.`,
+    ],
+    coast: [
+      `${prefix}${spot}은 강한 햇빛과 바람이 먼저 남는 구간이었다.`,
+      `${prefix}${spot}을 지나며 넓은 하늘과 해안 쪽 풍경을 기록했다.`,
+      `${prefix}${spot}에서는 빛이 강해도 길 위의 분위기가 선명하게 남았다.`,
+    ],
+    dessert: [
+      `${prefix}${spot}에서 짧게 멈춰 가게 안의 장면을 남겼다.`,
+      `${prefix}${spot}에서는 이동 중간의 가벼운 간식 시간이 기록됐다.`,
+      `${prefix}${spot}의 실내 컷은 쉬어 가는 리듬으로 묶었다.`,
+    ],
+    hotel: [
+      `${prefix}${spot}의 불빛이 저녁 동선의 기준점처럼 남았다.`,
+      `${prefix}${spot} 앞에서 하루가 밤 쪽으로 넘어가는 장면을 잡았다.`,
+      `${prefix}${spot} 주변의 조명과 큰길이 저녁 기록으로 정리됐다.`,
+    ],
+    indoor: [
+      `${prefix}${spot}에서는 실내 조명과 함께 모인 얼굴들이 기록됐다.`,
+      `${prefix}${spot} 안쪽의 분위기를 하루 마지막 장면처럼 남겼다.`,
+      `${prefix}${spot}에서는 사람들과 공간의 결이 같이 담겼다.`,
+    ],
+    generic: [
+      `${prefix}${spot}. ${stay}으로 남았다.`,
+      `${prefix}${spot}에서 동선이 잠깐 느려졌다.`,
+      `${prefix}${spot}을 지나며 하루의 한 구간을 기록했다.`,
+    ],
+  };
+  const options = templates[scene] || templates.generic;
+  return options[stableMemoIndex([scene, spot, part, timeText, stay, photoCount], options.length)];
+}
+
+// 장소·시각·머문시간 기반의 다이어리풍 메모 초안.
+// 안내 문구는 메모에 넣지 않는다 — 편집 UI에서 회색 힌트로 따로 보여준다.
+function makeDraftNote({ place, timestamp, durationMinutes, photoCount = 1 }) {
+  const spot = (place || '이곳').split(',')[0].trim() || '이곳';
+  const { part, timeText } = getDiaryTimePart(timestamp);
+  const stay = getStayPhrase(durationMinutes, photoCount);
+  return buildSceneMemo({
+    scene: classifyMemoScene(spot),
+    spot,
+    part,
+    timeText,
+    stay,
+    photoCount,
+  });
 }
 
 async function generateDiaryFromFiles(files) {
@@ -3343,12 +3458,12 @@ function bootstrap() {
 // ============================================================
 
 const MEMORY_VIDEO_FORMATS = [
-  { mime: 'video/webm;codecs=vp9,opus', label: 'WEBM' },
-  { mime: 'video/webm;codecs=vp8,opus', label: 'WEBM' },
-  { mime: 'video/webm', label: 'WEBM' },
   { mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', label: 'MP4' },
   { mime: 'video/mp4;codecs=h264,aac', label: 'MP4' },
   { mime: 'video/mp4', label: 'MP4' },
+  { mime: 'video/webm;codecs=vp9,opus', label: 'WEBM' },
+  { mime: 'video/webm;codecs=vp8,opus', label: 'WEBM' },
+  { mime: 'video/webm', label: 'WEBM' },
 ];
 
 function pickVideoFormat() {
@@ -3829,9 +3944,16 @@ async function createMemoryVideo() {
     );
 
     const trip = getSelectedTrip();
-    const samples = trip?.recording?.samples || [];
-    const rawPath = samples.length >= 2
-      ? samples.map((s) => [s.lng, s.lat])
+    const samplePoints = getSamplePoints(trip);
+    const entryPoints = entries.map((entry, index) => ({
+      lngLat: entry.center,
+      tip: entry.time || '',
+      id: entry.photoId || `video_entry_${index}`,
+    }));
+    const footprintPoints = getTripRouteFootprintPoints(trip);
+    const rawRoutePoints = getDisplayRoutePoints(samplePoints, footprintPoints, entryPoints);
+    const rawPath = rawRoutePoints.length >= 2
+      ? rawRoutePoints.map((point) => point.lngLat)
       : entries.map((e) => e.center);
 
     const W = 720; const H = 1280;

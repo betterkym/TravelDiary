@@ -164,17 +164,78 @@ def _fallback_note(entry: TimelineEntry) -> str:
     """
     place = _clean_place(entry.place)
     part = _time_of_day(entry)
-    time_text = _clock_text(entry)
+    time_text = _clock_text(entry).lstrip(", ")
     if place == "이동 중":
         return f"{part}, 이동하는 길 위에서 남긴 한 장면."
 
     # 안내 문구("이어서 적어 보세요" 류)는 넣지 않는다 — 프런트가 회색 힌트로 따로 보여준다.
-    templates = [
-        f"{part}의 {place}{time_text}. 잠시 걸음을 멈춘 자리.",
-        f"{place}, {part}{time_text}. 발자취가 이 지점에 머물렀다.",
-        f"{part}에 들른 {place}{time_text}.",
-    ]
+    prefix = f"{time_text}, " if time_text else f"{part}에 "
+    photo_count = entry.photo_count or len(entry.photo_urls) or len(entry.photo_ids) or 1
+    count_text = " 대표 컷만 골라" if photo_count >= 2 else ""
+    scene = _scene_type(place)
+    templates_by_scene = {
+        "city": [
+            f"{prefix}{place}의 큰길과 신호 앞에서 이동의 시작점이 남았다.",
+            f"{prefix}{place}에서 도시의 흐름을 배경으로 첫 장면을 잡았다.",
+            f"{prefix}{place} 주변의 길과 사람 흐름이 하루의 출발처럼 기록됐다.",
+        ],
+        "flowers": [
+            f"{prefix}{place}에서는 꽃과 골목의 색이 같이 남았다.",
+            f"{prefix}{place} 옆을 지나며 거리의 색을{count_text} 기록했다.",
+            f"{prefix}{place}의 나무와 건물 사이로 걷던 장면이 정리됐다.",
+        ],
+        "cafe": [
+            f"{prefix}{place}에서 잠깐 앉아 커피와 쉬는 시간을 남겼다.",
+            f"{prefix}{place} 안쪽의 테이블 컷을 묶어 쉬어 간 흔적으로 정리했다.",
+            f"{prefix}{place}에서는 이동 사이의 짧은 휴식이 중심이 됐다.",
+        ],
+        "coast": [
+            f"{prefix}{place}은 강한 햇빛과 바람이 먼저 남는 구간이었다.",
+            f"{prefix}{place}을 지나며 넓은 하늘과 해안 쪽 풍경을 기록했다.",
+            f"{prefix}{place}에서는 빛이 강해도 길 위의 분위기가 선명하게 남았다.",
+        ],
+        "dessert": [
+            f"{prefix}{place}에서 짧게 멈춰 가게 안의 장면을 남겼다.",
+            f"{prefix}{place}에서는 이동 중간의 가벼운 간식 시간이 기록됐다.",
+            f"{prefix}{place}의 실내 컷은 쉬어 가는 리듬으로 묶었다.",
+        ],
+        "hotel": [
+            f"{prefix}{place}의 불빛이 저녁 동선의 기준점처럼 남았다.",
+            f"{prefix}{place} 앞에서 하루가 밤 쪽으로 넘어가는 장면을 잡았다.",
+            f"{prefix}{place} 주변의 조명과 큰길이 저녁 기록으로 정리됐다.",
+        ],
+        "indoor": [
+            f"{prefix}{place}에서는 실내 조명과 함께 모인 얼굴들이 기록됐다.",
+            f"{prefix}{place} 안쪽의 분위기를 하루 마지막 장면처럼 남겼다.",
+            f"{prefix}{place}에서는 사람들과 공간의 결이 같이 담겼다.",
+        ],
+        "generic": [
+            f"{prefix}{place}. 잠시 걸음을 멈춘 지점으로 남았다.",
+            f"{prefix}{place}에서 동선이 잠깐 느려졌다.",
+            f"{prefix}{place}을 지나며 하루의 한 구간을 기록했다.",
+        ],
+    }
+    templates = templates_by_scene.get(scene, templates_by_scene["generic"])
     return templates[_template_index(entry, len(templates))]
+
+
+def _scene_type(place: str) -> str:
+    text = place.lower()
+    if re.search(r"아이스크림|젤라토|디저트|빙수|ice ?cream|gelato|dessert", text):
+        return "dessert"
+    if re.search(r"카페|커피|cafe|coffee", text):
+        return "cafe"
+    if re.search(r"바다|해안|해변|항구|마르세유|beach|coast|ocean|sea|harbor|harbour", text):
+        return "coast"
+    if re.search(r"꽃|정원|공원|가로수|flower|garden|park", text):
+        return "flowers"
+    if re.search(r"호텔|레지나|야경|hotel|regina|night", text):
+        return "hotel"
+    if re.search(r"라운지|실내|로비|박물관|미술관|궁|lounge|lobby|museum|gallery|palace", text):
+        return "indoor"
+    if re.search(r"도심|거리|광장|골목|신호|시내|city|downtown|street|square", text):
+        return "city"
+    return "generic"
 
 
 def _clock_text(entry: TimelineEntry) -> str:
