@@ -763,6 +763,19 @@ function renderTripOnMap(trip) {
     }
   });
 
+  // 실시간 GPS 기록이 없고 업로드한 사진만 있는 여행: 사진 위치로 경로·발자취 표시
+  if (!samples.length && Array.isArray(trip?.photos) && trip.photos.length) {
+    const photoPoints = trip.photos
+      .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat))
+      .sort((a, b) => new Date(a.takenAt) - new Date(b.takenAt));
+    if (photoPoints.length) {
+      const photoCoords = photoPoints.map((p) => [p.lng, p.lat]);
+      setRouteLine(photoCoords);
+      photoPoints.forEach((p) => addFootprint([p.lng, p.lat]));
+      centerMapOn(photoCoords[photoCoords.length - 1], 14);
+    }
+  }
+
   const last = samples[samples.length - 1];
   if (last) {
     ensureCurrentMarker([last.lng, last.lat]);
