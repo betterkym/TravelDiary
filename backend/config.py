@@ -19,6 +19,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 UPLOAD_DIR = BASE_DIR / os.getenv("UPLOAD_DIR", "uploads")
 OUTPUT_DIR = BASE_DIR / os.getenv("OUTPUT_DIR", "outputs")
+DATA_DIR = BASE_DIR / os.getenv("DATA_DIR", "data")
+DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "travel_diary.sqlite3")))
 
 MAX_PHOTOS = int(os.getenv("MAX_PHOTOS", "30"))
 MAX_PHOTO_MB = int(os.getenv("MAX_PHOTO_MB", "15"))
@@ -33,3 +35,4 @@ MAX_SELECTED_PHOTOS = 3
 # 필요한 폴더 보장
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)

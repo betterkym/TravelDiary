@@ -68,6 +68,12 @@ def upload_photos(trip_id: str, files: list[UploadFile] = File(...)):
     return {"count": len(storage.get_photos(trip_id))}
 
 
+@app.get("/api/trips/{trip_id}/photos")
+def list_photos(trip_id: str):
+    _require_trip(trip_id)
+    return {"photos": storage.get_photos(trip_id)}
+
+
 @app.post("/api/trips/{trip_id}/generate", response_model=Diary)
 def generate(trip_id: str):
     _require_trip(trip_id)
@@ -88,6 +94,14 @@ def get_diary(trip_id: str):
     if diary is None:
         raise HTTPException(404, "아직 생성된 다이어리가 없습니다. 먼저 generate 를 호출하세요.")
     return diary
+
+
+@app.get("/api/trips/latest")
+def latest_trip():
+    trip_id = storage.get_latest_trip_id()
+    if trip_id is None:
+        raise HTTPException(404, "저장된 여행이 없습니다.")
+    return {"trip_id": trip_id}
 
 
 def _require_trip(trip_id: str) -> None:

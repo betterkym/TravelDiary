@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f7c8a6" />
     <title>Travel Diary MVP</title>
+    <link rel="manifest" href="manifest.json" />
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <script defer src="config.local.js"></script>
@@ -18,8 +19,12 @@
       <section class="screen screen--create" data-screen="create" aria-labelledby="create-title">
         <div class="brand-badge">Travel Diary</div>
         <div class="hero-copy">
-          <h1 id="create-title">새 여행 만들기</h1>
-          <p>여행의 시작과 끝을 한 장의 지도와 한 권의 다이어리로 남겨보세요.</p>
+          <h1 id="create-title">새 여행 시작</h1>
+          <p>여행 제목과 기본 정보를 입력하고 기록을 시작해 보세요.</p>
+          <div class="hero-actions">
+            <button class="secondary-button" type="button" id="open-diary-button" data-nav="diary">다이어리 바로가기</button>
+            <button class="secondary-button" type="button" id="create-photo-import-button">여행 사진 업로드</button>
+          </div>
         </div>
 
         <form class="card form-card" id="create-form">
@@ -59,6 +64,7 @@
           <div class="map-canvas" aria-label="지도 영역">
             <div id="map" class="mapbox-map"></div>
             <div class="map-overlay">
+              <button class="segment-button segment-button--back map-back-button" type="button" data-nav="back" aria-label="이전 화면">←</button>
               <div class="recording-badge" id="recording-badge" hidden>
                 <span class="status-pill">기록 중</span>
                 <span id="recording-time">00:00:00</span>
