@@ -759,7 +759,7 @@ function renderTripOnMap(trip) {
   setRouteLine(coordinates);
 
   (trip?.recording?.footprints || []).forEach((point) => {
-    addFootprint([point.lng, point.lat]);
+    addFootprint([point.lng, point.lat], point.timestamp ? formatTipTime(point.timestamp) : '');
   });
 
   (trip?.recording?.livePhotos || []).forEach((photo) => {
@@ -771,23 +771,23 @@ function renderTripOnMap(trip) {
   // 실시간 GPS 기록이 없고 업로드한 사진만 있는 여행: 사진/다이어리 위치로 경로·발자취 표시
   if (!samples.length) {
     let points = [];
-    // 1순위: 저장된 사진 좌표
+    // 1순위: 저장된 사진 좌표 (+ 촬영시각 툴팁)
     if (Array.isArray(trip?.photos) && trip.photos.length) {
       points = trip.photos
         .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat))
         .sort((a, b) => new Date(a.takenAt) - new Date(b.takenAt))
-        .map((p) => [p.lng, p.lat]);
+        .map((p) => ({ lngLat: [p.lng, p.lat], tip: formatTipTime(p.takenAt) }));
     }
     // 2순위: 다이어리 엔트리 위치(항상 보존됨)
     if (!points.length && Array.isArray(trip?.diary) && trip.diary.length) {
       points = trip.diary
         .filter((e) => Array.isArray(e.center) && Number.isFinite(e.center[0]) && Number.isFinite(e.center[1]))
-        .map((e) => e.center);
+        .map((e) => ({ lngLat: e.center, tip: e.timestamp ? formatTipTime(e.timestamp) : '' }));
     }
     if (points.length) {
-      setRouteLine(points);
-      points.forEach((pt) => addFootprint(pt));
-      centerMapOn(points[points.length - 1], 14);
+      setRouteLine(points.map((p) => p.lngLat));
+      points.forEach((p) => addFootprint(p.lngLat, p.tip));
+      centerMapOn(points[points.length - 1].lngLat, 14);
     }
   }
 
@@ -973,15 +973,27 @@ function clearLiveMarkers() {
   }
 }
 
-function addFootprint(lngLat) {
+// tip: 커서를 올렸을 때 보여줄 간단 정보 (예: '7월 16일 · 오후 2:30')
+function addFootprint(lngLat, tip) {
   if (!state.map) return;
+  const el = makeFootprintElement();
+  if (tip) el.setAttribute('data-tip', tip);
   const marker = new window.mapboxgl.Marker({
-    element: makeFootprintElement(),
+    element: el,
     anchor: 'center',
   })
     .setLngLat(lngLat)
     .addTo(state.map);
   state.footprintMarkers.push(marker);
+}
+
+// 발자취 툴팁용 시간 포맷: '7월 16일 · 오후 2:30'
+function formatTipTime(dateLike) {
+  const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
+  if (Number.isNaN(date.getTime())) return '';
+  const md = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric' }).format(date);
+  const hm = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' }).format(date);
+  return `${md} · ${hm}`;
 }
 
 function ensureCurrentMarker(lngLat) {
@@ -1028,7 +1040,7 @@ function handlePosition(position) {
       distanceFromLastFootprint > FOOTPRINT_MIN_REPEAT_DISTANCE_M);
 
   if (shouldDropFootprint) {
-    addFootprint(lngLat);
+    addFootprint(lngLat, formatTipTime(timestamp));
     if (state.activeTrip) {
       state.activeTrip.recording.footprints.push({
         lng: lngLat[0],
@@ -1125,9 +1137,24 @@ function endRecording() {
   updateNavButtons();
 
   // 기록 중 찍은 현장 사진이 있으면 바로 다이어리로 정리
+  // 백엔드가 연결돼 있으면 업로드해서 AI 선별(품질평가·중복제거) 파이프라인을 태운다.
   const livePhotoData = livePhotosAsPhotoData();
   if (livePhotoData.length) {
-    generateDiaryFromPhotoData(livePhotoData).catch((error) => {
+    (async () => {
+      if (state.tripId) {
+        try {
+          const files = await Promise.all(
+            livePhotoData.map((p) => dataUrlToFile(p.dataUrl, p.fileName)),
+          );
+          await uploadPhotosToApi(files);
+          const usedBackend = await generateDiaryFromBackend();
+          if (usedBackend) return;
+        } catch (error) {
+          console.warn('현장 사진 백엔드 선별 실패, 로컬 처리로 폴백:', error);
+        }
+      }
+      await generateDiaryFromPhotoData(livePhotoData);
+    })().catch((error) => {
       console.error(error);
       showToast('현장 사진 정리 중 오류가 발생했어요.');
     });
@@ -1135,6 +1162,13 @@ function endRecording() {
   }
   showToast('오늘의 여정이 사진첩과 연결되었습니다. 사진 불러오기 버튼을 눌러 주세요.');
   return;
+}
+
+// dataURL → File 변환 (현장 사진을 백엔드에 업로드할 때 사용)
+async function dataUrlToFile(dataUrl, fileName = 'live-photo.jpg') {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], fileName, { type: blob.type || 'image/jpeg' });
 }
 
 function getLocalDateKey(date) {
@@ -1281,21 +1315,39 @@ function clearLastTripId() {
   window.localStorage.removeItem(LAST_TRIP_ID_STORAGE_KEY);
 }
 
+function getEntryPhotoUrls(entry) {
+  const urls = Array.isArray(entry?.photo_urls) && entry.photo_urls.length
+    ? entry.photo_urls
+    : entry?.photo_url
+      ? [entry.photo_url]
+      : [];
+  return urls.map((url) => toAbsolutePhotoUrl(url)).filter(Boolean);
+}
+
+function getEntryPhotoIds(entry, diary, index, count) {
+  if (Array.isArray(entry?.photo_ids) && entry.photo_ids.length) return entry.photo_ids;
+  return diary.selected_photos?.slice(index, index + count).map((photo) => photo.photo_id) || [];
+}
+
 function diaryFromApi(diary) {
   if (!diary) return null;
   const timeline = Array.isArray(diary.timeline) ? diary.timeline : [];
   return timeline.map((entry, index) => {
     const entryDate = new Date(entry.time);
+    const photoUrls = getEntryPhotoUrls(entry);
+    const photoCount = Number.isFinite(entry.photo_count)
+      ? entry.photo_count
+      : photoUrls.length || (entry.photo_url ? 1 : 0);
     return {
-      photoId: diary.selected_photos?.[index]?.photo_id || entry.photo_url || index,
-      photoIds: diary.selected_photos?.slice(index, index + 3).map((photo) => photo.photo_id) || [],
+      photoId: entry.photo_ids?.[0] || diary.selected_photos?.[index]?.photo_id || entry.photo_url || index,
+      photoIds: getEntryPhotoIds(entry, diary, index, photoCount),
       time: formatRoundedTimeLabel(entryDate),
       dateLabel: `${formatMonthDay(entryDate)} · ${diary.title || state.trip.title || '여행'}`,
       dayLabel: `${index + 1}일차`,
       place: entry.place,
       note: entry.note,
-      photoCount: diary.selected_photos?.length || 0,
-      photoUrls: entry.photo_url ? [entry.photo_url] : [],
+      photoCount,
+      photoUrls,
       center: entry.lat && entry.lng ? [entry.lng, entry.lat] : null,
       timestamp: entryDate,
       durationMinutes: null,
@@ -1380,15 +1432,18 @@ async function generateDiaryFromBackend() {
 
   const entries = timeline.map((entry, index) => {
     const when = entry.time ? new Date(entry.time) : null;
-    const photo = entry.photo_url ? toAbsolutePhotoUrl(entry.photo_url) : '';
+    const photoUrls = getEntryPhotoUrls(entry);
+    const photo = photoUrls[0] || '';
     const hasCenter = Number.isFinite(entry.lng) && Number.isFinite(entry.lat);
     return {
+      photoId: entry.photo_ids?.[0] || entry.photo_url || index,
+      photoIds: Array.isArray(entry.photo_ids) ? entry.photo_ids : [],
       time: when && !Number.isNaN(when.getTime()) ? formatRoundedTimeLabel(when) : '',
       place: entry.place || `기록 스팟 ${index + 1}`,
       note: entry.note || '',
-      photoUrls: photo ? [photo] : [],
+      photoUrls,
       mainPhoto: photo || null,
-      photoCount: 1,
+      photoCount: Number.isFinite(entry.photo_count) ? entry.photo_count : photoUrls.length || 1,
       center: hasCenter ? [entry.lng, entry.lat] : null,
       timestamp: when && !Number.isNaN(when.getTime()) ? when : new Date(),
       dateLabel: data.title || state.trip.title || '여행',
@@ -1445,11 +1500,13 @@ function livePhotosAsPhotoData() {
     }));
 }
 
-// 장소·시간대·머문시간·장수 기반의 다이어리풍 메모 초안
-function makeDraftNote({ place, timestamp, durationMinutes, photoCount }) {
+// 장소·시각·머문시간 기반의 다이어리풍 메모 초안.
+// 안내 문구는 메모에 넣지 않는다 — 편집 UI에서 회색 힌트로 따로 보여준다.
+function makeDraftNote({ place, timestamp, durationMinutes }) {
   const spot = (place || '이곳').split(',')[0].trim() || '이곳';
   const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  const h = Number.isNaN(date.getTime()) ? null : date.getHours();
+  const valid = !Number.isNaN(date.getTime());
+  const h = valid ? date.getHours() : null;
   const part =
     h === null ? '여행 중' :
     h < 5 ? '깊은 밤' :
@@ -1457,12 +1514,16 @@ function makeDraftNote({ place, timestamp, durationMinutes, photoCount }) {
     h < 15 ? '한낮' :
     h < 18 ? '오후' :
     h < 21 ? '저녁' : '밤';
+  const timeText = valid
+    ? new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' }).format(date)
+    : '';
   const stay =
     durationMinutes >= 60 ? `${Math.round(durationMinutes / 60)}시간 가까이 머물렀다` :
     durationMinutes > 3 ? `${durationMinutes}분쯤 머물렀다` :
     '잠시 걸음을 멈췄다';
-  const shots = photoCount > 1 ? `${photoCount}장의 장면이 남았다` : '한 장면이 남았다';
-  return `${part}의 ${spot}. ${stay}. ${shots}. 여기서 본 것과 느낀 점을 이어서 적어 보세요.`;
+  return timeText
+    ? `${part}의 ${spot}, ${timeText}. ${stay}.`
+    : `${part}의 ${spot}. ${stay}.`;
 }
 
 async function generateDiaryFromFiles(files) {
@@ -1564,9 +1625,9 @@ async function generateDiaryFromPhotoData(parsed) {
     upsertSavedTrip(state.activeTrip);
   }
 
-  // 지도에 사진 위치 표시
+  // 지도에 사진 위치 표시 (촬영시각 툴팁 포함)
   photoData.forEach((photo) => {
-    addFootprint([photo.lng, photo.lat]);
+    addFootprint([photo.lng, photo.lat], formatTipTime(photo.takenAt));
   });
 
   // 경로선 그리기
@@ -1637,7 +1698,8 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
                 <span class="timeline-note-label">AI 메모 초안</span>
               </div>
               <p class="timeline-note" data-note-text="${index}">${noteHtml}</p>
-              <textarea class="timeline-note-input" data-note-input="${index}" maxlength="300" hidden>${noteHtml}</textarea>
+              <p class="timeline-note-guide" data-note-guide="${index}">✎ 여기서 본 것과 느낀 점을 이어서 적어 보세요</p>
+              <textarea class="timeline-note-input" data-note-input="${index}" maxlength="300" placeholder="여기서 본 것과 느낀 점을 이어서 적어 보세요" hidden>${noteHtml}</textarea>
               <div class="timeline-note-actions" data-note-actions="${index}" hidden>
                 <button class="timeline-note-save" type="button" data-save-note="${index}">저장</button>
                 <button class="timeline-note-cancel" type="button" data-cancel-note="${index}">취소</button>
@@ -1669,10 +1731,12 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
       const input = elements.timeline.querySelector(`[data-note-input="${index}"]`);
       const text = elements.timeline.querySelector(`[data-note-text="${index}"]`);
       const actions = elements.timeline.querySelector(`[data-note-actions="${index}"]`);
+      const guide = elements.timeline.querySelector(`[data-note-guide="${index}"]`);
       if (!input || !text || !actions) return;
       input.hidden = false;
       text.hidden = true;
       actions.hidden = false;
+      if (guide) guide.hidden = true;
       button.hidden = true;
       // 수정 버튼은 카드 상단, 편집기는 하단이므로 편집기가 보이게 스크롤
       input.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2183,7 +2247,7 @@ function bootstrap() {
     if (!photoId || photoId === 'undefined') return;
     try {
       await submitPhotoFeedback(photoId, kind);
-      button.classList.add('is-sent');
+      button.classList.add('is-sent', kind === 'approve' ? 'is-sent-approve' : 'is-sent-reject');
       showToast(kind === 'approve' ? '좋아요를 반영했어요' : '별로예요를 반영했어요');
     } catch (error) {
       console.error(error);

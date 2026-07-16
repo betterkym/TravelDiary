@@ -103,6 +103,9 @@ class TimelineEntry(BaseModel):
     place: str
     note: str
     photo_url: Optional[str] = None
+    photo_urls: list[str] = Field(default_factory=list)
+    photo_ids: list[str] = Field(default_factory=list)
+    photo_count: int = 1
     lat: Optional[float] = None
     lng: Optional[float] = None
 

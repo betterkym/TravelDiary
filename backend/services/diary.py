@@ -58,15 +58,28 @@ def _fallback_note(entry: TimelineEntry) -> str:
     """
     place = _clean_place(entry.place)
     part = _time_of_day(entry)
+    time_text = _clock_text(entry)
     if place == "이동 중":
-        return f"{part}, 이동하는 길 위에서 남긴 한 장면. 어디로 향하던 중이었는지 이어서 적어 보세요."
+        return f"{part}, 이동하는 길 위에서 남긴 한 장면."
 
+    # 안내 문구("이어서 적어 보세요" 류)는 넣지 않는다 — 프런트가 회색 힌트로 따로 보여준다.
     templates = [
-        f"{part}의 {place}. 이곳에서 잠시 걸음을 멈추고 한 장면을 남겼다. 그때의 공기와 소리를 이어서 적어 보세요.",
-        f"{place}, {part}. 사진 속 장면이 이 자리의 기억을 붙잡아 두었다. 함께 있었던 사람이나 나눈 이야기를 덧붙여 보세요.",
-        f"{part}에 들른 {place}. 지도 위 발자취가 이 지점에서 멈춰 있었다. 왜 여기서 멈췄는지 이어서 적어 보세요.",
+        f"{part}의 {place}{time_text}. 잠시 걸음을 멈춘 자리.",
+        f"{place}, {part}{time_text}. 발자취가 이 지점에 머물렀다.",
+        f"{part}에 들른 {place}{time_text}.",
     ]
     return templates[_template_index(entry, len(templates))]
+
+
+def _clock_text(entry: TimelineEntry) -> str:
+    """', 오후 2:30' 형태의 시각 표기. 시간이 없으면 빈 문자열."""
+    try:
+        h, m = entry.time.hour, entry.time.minute
+    except Exception:
+        return ""
+    meridiem = "오전" if h < 12 else "오후"
+    h12 = h % 12 or 12
+    return f", {meridiem} {h12}:{m:02d}"
 
 
 def _time_of_day(entry: TimelineEntry) -> str:

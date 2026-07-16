@@ -1120,3 +1120,88 @@ textarea:focus-visible {
   border: 1px solid rgba(184, 66, 46, 0.3);
   background: rgba(255, 244, 241, 0.9);
 }
+
+/* 발자취 hover 툴팁 (data-tip) */
+.footprint-marker { position: relative; }
+.footprint-marker[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 5px 9px;
+  border-radius: 10px;
+  background: rgba(51, 37, 31, 0.92);
+  color: #fff7f0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+/* 기록 중 표시: 빨간 점 펄스 + 시간 */
+.recording-badge { font-weight: 800; font-variant-numeric: tabular-nums; }
+.rec-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e2422c;
+  display: inline-block;
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(226, 66, 44, 0.55); }
+  50% { box-shadow: 0 0 0 8px rgba(226, 66, 44, 0); }
+}
+
+/* 하단 기록 컨트롤: 현장 사진은 동그란 아이콘, 종료는 정지 사각형 */
+.record-button--live-photo {
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.35rem;
+  display: inline-grid;
+  place-items: center;
+}
+.record-button--end {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.stop-square {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentColor;
+  display: inline-block;
+}
+
+/* 좋아요/싫어요 클릭 반응 */
+.photo-feedback-button {
+  transition: transform 140ms ease, background 140ms ease, color 140ms ease;
+}
+.photo-feedback-button.is-sent { animation: feedback-pop 320ms ease; }
+.photo-feedback-button.is-sent-approve { background: #2f9e5f; color: #ffffff; }
+.photo-feedback-button.is-sent-reject { background: #d64541; color: #ffffff; }
+@keyframes feedback-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+
+/* 다이어리 헤더 버튼(삭제/닫기) 크기 축소 */
+.diary-actions .status-pill {
+  font-size: 0.76rem;
+  padding: 6px 10px;
+}
+
+/* 메모 이어쓰기 회색 가이드 */
+.timeline-note-guide {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: #b3a49b;
+  font-style: italic;
+}
