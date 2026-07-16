@@ -12,7 +12,7 @@
     <script defer src="config.js"></script>
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.js"></script>
     <!-- 로컬 설정(Mapbox 토큰 등). app.js 보다 먼저 실행되어야 함. config.local.js 는 gitignore 됨. -->
-    <script defer src="app.js?v=20260716c"></script>
+    <script defer src="app.js?v=20260716d"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -24,6 +24,7 @@
           <div class="hero-actions">
             <button class="secondary-button" type="button" id="open-diary-button" data-nav="diary">다이어리 바로가기</button>
           </div>
+          <p class="photo-import-progress photo-import-progress--hero" id="create-photo-import-progress" hidden>업로드 준비 중</p>
         </div>
 
         <form class="card form-card" id="create-form" autocomplete="off">
