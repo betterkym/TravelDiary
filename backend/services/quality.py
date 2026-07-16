@@ -20,6 +20,13 @@ _PREFERRED_SHORT_EDGE = 1600
 _CENTER_WEIGHT = 0.55
 _EDGE_WEIGHT = 0.45
 
+# --- 하드 컷(삭제) 임계값: 명백히 못 쓰는 사진만 걸러낸다(보수적) ---
+_HARD_BLUR_MIN = 8.0       # Laplacian variance 이 값 미만 = 심한 흔들림/초점 실패
+_HARD_DARK_RATIO = 0.45    # 완전 암부 픽셀 비율이 이보다 크면 너무 어두움
+_HARD_HIGHLIGHT_RATIO = 0.45  # 완전 백부 픽셀 비율이 이보다 크면 노출 과다
+_HARD_MIN_SHORT_EDGE = 480    # 짧은 변이 이보다 작으면 해상도 부족
+_HARD_BACKLIGHT = 0.32     # 배경 대비 중앙(피사체)이 이만큼 어두우면 역광
+
 
 def _scale(value: float, low: float, high: float) -> float:
     if high <= low:
@@ -91,6 +98,27 @@ def _saturation_score(path: Path) -> float:
         return 0.5
 
 
+def _backlight_score(gray: np.ndarray) -> float:
+    # 역광 추정: 배경(테두리)이 밝고 중앙(피사체)이 어두울수록 값이 커짐(0~1).
+    if gray.ndim != 2:
+        return 0.0
+    h, w = gray.shape
+    if h < 8 or w < 8:
+        return 0.0
+    center = gray[int(h * 0.3):int(h * 0.7), int(w * 0.3):int(w * 0.7)]
+    border = np.concatenate([
+        gray[: max(1, int(h * 0.15)), :].ravel(),
+        gray[max(0, int(h * 0.85)) :, :].ravel(),
+        gray[:, : max(1, int(w * 0.15))].ravel(),
+        gray[:, max(0, int(w * 0.85)) :].ravel(),
+    ])
+    if center.size == 0 or border.size == 0:
+        return 0.0
+    center_mean = float(np.mean(center)) / 255.0
+    border_mean = float(np.mean(border)) / 255.0
+    return max(0.0, border_mean - center_mean)
+
+
 def _face_hint_score(gray: np.ndarray) -> float:
     # 얼굴 검출이 없는 환경에서, 인물 사진일 가능성을 간접적으로 추정.
     if gray.ndim != 2:
@@ -144,6 +172,7 @@ def score(photo: Photo, path: Path) -> Photo:
             edge_balance = _edge_balance_score(gray)
             saturation = _saturation_score(path)
             face_hint = _face_hint_score(gray)
+            backlight = _backlight_score(gray)
 
             # 사진 culling에 맞춰 "보기 좋은 컷"을 우선. 선명도/구도/노출을 중심으로 구성.
             total_score = (
@@ -155,6 +184,21 @@ def score(photo: Photo, path: Path) -> Photo:
                 + (0.03 * saturation)
                 + (0.02 * face_hint)
             )
+            # 역광은 감점(피사체가 어두워 보임)
+            total_score = max(0.0, total_score - 0.5 * backlight)
+
+            # --- 하드 컷: 명백히 못 쓰는 사진은 rejected 처리 ---
+            reject_reason = ""
+            if sharpness_raw < _HARD_BLUR_MIN:
+                reject_reason = "흔들림/초점 실패"
+            elif darkness_ratio > _HARD_DARK_RATIO:
+                reject_reason = "너무 어두움"
+            elif highlight_ratio > _HARD_HIGHLIGHT_RATIO:
+                reject_reason = "노출 과다(너무 밝음)"
+            elif short_edge < _HARD_MIN_SHORT_EDGE:
+                reject_reason = "해상도 부족"
+            elif backlight > _HARD_BACKLIGHT:
+                reject_reason = "역광(피사체 어두움)"
 
             photo.quality_score = round(total_score, 3)
             photo.sharpness_raw = round(sharpness_raw, 3)
@@ -165,6 +209,9 @@ def score(photo: Photo, path: Path) -> Photo:
             photo.edge_balance_score = round(edge_balance, 3)
             photo.saturation_score = round(saturation, 3)
             photo.face_hint_score = round(face_hint, 3)
+            photo.backlight_score = round(backlight, 3)
+            photo.rejected = bool(reject_reason)
+            photo.reject_reason = reject_reason
     except Exception:
         photo.quality_score = 0.5   # 판단 불가 → 중립
     return photo
