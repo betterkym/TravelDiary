@@ -11,7 +11,7 @@
     <script defer src="config.local.js"></script>
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.js"></script>
     <!-- 로컬 설정(Mapbox 토큰 등). app.js 보다 먼저 실행되어야 함. config.local.js 는 gitignore 됨. -->
-    <script defer src="app.js?v=20260716a"></script>
+    <script defer src="app.js?v=20260716c"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -26,18 +26,18 @@
           </div>
         </div>
 
-        <form class="card form-card" id="create-form">
+        <form class="card form-card" id="create-form" autocomplete="off">
           <label>
             <span>여행 제목</span>
-            <input id="trip-title" name="tripTitle" type="text" placeholder="예: 제주도 1일차" required />
+            <input id="trip-title" type="text" placeholder="예: 제주도 1일차" autocomplete="new-password" spellcheck="false" autocapitalize="off" autocorrect="off" readonly required />
           </label>
           <label>
             <span>여행 날짜</span>
-            <input id="trip-date" name="tripDate" type="date" required />
+            <input id="trip-date" type="date" required />
           </label>
           <label>
             <span>여행 지역</span>
-            <input id="trip-region" name="tripRegion" type="text" placeholder="예: 에스토니아 탈린" required />
+            <input id="trip-region" type="text" placeholder="예: 에스토니아 탈린" autocomplete="new-password" spellcheck="false" autocapitalize="off" autocorrect="off" readonly required />
           </label>
           <button class="primary-button" type="button" id="create-trip-button">여행 시작</button>
         </form>

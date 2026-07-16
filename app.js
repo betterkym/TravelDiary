@@ -1,6 +1,6 @@
 const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
 const API_BASE_URL = window.API_BASE_URL || '';
-const PHOTO_SPOT_RADIUS_M = 30;
+const PHOTO_SPOT_RADIUS_M = 100;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 3;
 const PHOTO_SPOT_GAP_MS = 5 * 60 * 1000;
@@ -10,6 +10,7 @@ const FOOTPRINT_MIN_GAP_MS = 15 * 1000;
 const FOOTPRINT_MIN_REPEAT_DISTANCE_M = 1;
 const CREATE_FORM_STORAGE_KEY = 'travel-diary:create-form';
 const LAST_TRIP_ID_STORAGE_KEY = 'travel-diary:last-trip-id';
+const LAST_DIARY_STORAGE_KEY = 'travel-diary:last-diary';
 
 const state = {
   screen: 'create',
@@ -578,27 +579,18 @@ function buildClusters(photos, allowCrossDate = false) {
     const photoPoint = [photo.lng, photo.lat];
     const photoTime = photo.takenAt.getTime();
     const photoDateKey = getLocalDateKey(photo.takenAt);
-    const photoPlaceKey = `${photoDateKey}:${Math.round(photo.lat * 10000)}:${Math.round(photo.lng * 10000)}`;
     if (
       lastGroup &&
-      (allowCrossDate || lastGroup.dateKey === photoDateKey) &&
-      lastGroup.placeKey === photoPlaceKey
+      (allowCrossDate || lastGroup.dateKey === photoDateKey)
     ) {
       const gap = photoTime - lastGroup.lastTakenAt;
       const distanceToAnchor = distanceMeters(lastGroup.anchorCenter, photoPoint);
-      const distanceToCenter = distanceMeters(lastGroup.center, photoPoint);
       if (
         gap <= PHOTO_SPOT_GAP_MS &&
-        gap <= PHOTO_SPOT_MAX_SAME_PLACE_GAP_MS &&
-        distanceToAnchor <= PHOTO_SPOT_RADIUS_M &&
-        distanceToCenter <= PHOTO_SPOT_RADIUS_M
+        distanceToAnchor <= PHOTO_SPOT_RADIUS_M
       ) {
         lastGroup.photos.push(photo);
         lastGroup.lastTakenAt = photoTime;
-        lastGroup.center = [
-          (lastGroup.center[0] * (lastGroup.photos.length - 1) + photo.lng) / lastGroup.photos.length,
-          (lastGroup.center[1] * (lastGroup.photos.length - 1) + photo.lat) / lastGroup.photos.length,
-        ];
         continue;
       }
     }
@@ -609,7 +601,6 @@ function buildClusters(photos, allowCrossDate = false) {
       firstTakenAt: photoTime,
       lastTakenAt: photoTime,
       dateKey: photoDateKey,
-      placeKey: photoPlaceKey,
     });
   }
   return groups;
@@ -688,6 +679,26 @@ function clearLastTripId() {
   window.localStorage.removeItem(LAST_TRIP_ID_STORAGE_KEY);
 }
 
+function saveLastDiarySnapshot(payload) {
+  if (!window.localStorage || !payload) return;
+  window.localStorage.setItem(LAST_DIARY_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function loadLastDiarySnapshot() {
+  if (!window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(LAST_DIARY_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearLastDiarySnapshot() {
+  if (!window.localStorage) return;
+  window.localStorage.removeItem(LAST_DIARY_STORAGE_KEY);
+}
+
 function diaryFromApi(diary) {
   if (!diary) return null;
   const timeline = Array.isArray(diary.timeline) ? diary.timeline : [];
@@ -711,6 +722,24 @@ function diaryFromApi(diary) {
 }
 
 async function restoreLastTrip() {
+  const snapshot = loadLastDiarySnapshot();
+  if (snapshot?.entries?.length) {
+    state.tripId = snapshot.tripId || state.tripId;
+    state.generatedDiary = snapshot.entries;
+    state.diaryUnlocked = true;
+    state.photoUrls = Array.isArray(snapshot.photoUrls) ? snapshot.photoUrls : [];
+    state.trip = {
+      title: snapshot.title || state.trip.title,
+      date: snapshot.date || state.trip.date,
+      region: snapshot.region || state.trip.region,
+    };
+    updateTripTexts();
+    updateNavButtons();
+    renderTimeline(snapshot.entries);
+    setScreen('diary');
+    return true;
+  }
+
   let tripId = loadLastTripId();
   if (!tripId) {
     try {
@@ -793,25 +822,49 @@ async function generateDiaryFromFiles(files) {
   state.photoUrls = photoData.map((photo) => photo.url);
   syncTripDateFromPhotos(photoData);
 
+  await Promise.all(photoData.map(async (photo, index) => {
+    const fallbackPlace = `기록 스팟 ${index + 1}`;
+    photo.placeName = await resolvePlaceName(photo.lng, photo.lat, fallbackPlace);
+  }));
+
   photoData.sort((a, b) => a.takenAt - b.takenAt);
-  const photoById = new Map(photoData.map((photo) => [photo.id, photo]));
   const dateKeys = [...new Set(photoData.map((photo) => getLocalDateKey(photo.takenAt)).filter(Boolean))];
   const allowCrossDate = dateKeys.length > 1
     ? window.confirm('사진 날짜가 달라요. 같은 여행으로 이어서 묶을까요?')
     : false;
   const clusters = buildClusters(photoData, allowCrossDate);
+  const clusterSummary = clusters
+    .map((cluster, index) => {
+      const firstPhoto = cluster.photos[0];
+      const lastPhoto = cluster.photos[cluster.photos.length - 1];
+      return `#${index + 1} ${cluster.photos.length}장 | ${firstPhoto.placeName || 'unknown'} | ${formatDateTimeLabel(firstPhoto.takenAt)} ~ ${formatDateTimeLabel(lastPhoto.takenAt)}`;
+    })
+    .join('\n');
+  console.debug('[TravelDiary] clusters', {
+    photoCount: photoData.length,
+    clusterCount: clusters.length,
+    allowCrossDate,
+    summary: clusterSummary,
+  });
+  showToast(`클러스터 ${clusters.length}개가 만들어졌어요`);
   const targetClusters = clusters;
   const entries = [];
   const tripName = state.trip.title || '여행';
+  const dayIndexByDate = new Map();
+  let nextDayIndex = 1;
 
   for (let i = 0; i < targetClusters.length; i += 1) {
     const cluster = targetClusters[i];
     const firstPhoto = cluster.photos[0];
+    const dateKey = getLocalDateKey(firstPhoto.takenAt);
+    if (!dayIndexByDate.has(dateKey)) {
+      dayIndexByDate.set(dateKey, nextDayIndex);
+      nextDayIndex += 1;
+    }
+    const dayIndex = dayIndexByDate.get(dateKey);
     const durationMinutes = Math.max(1, Math.round((cluster.lastTakenAt - cluster.firstTakenAt) / 60000));
     const timeLabel = formatRoundedTimeLabel(firstPhoto.takenAt);
-    const dayIndex = i + 1;
-    const fallbackPlace = `기록 스팟 ${i + 1}`;
-    const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
+    const place = firstPhoto.placeName || `기록 스팟 ${i + 1}`;
     const photoCount = cluster.photos.length;
     const photoUrls = cluster.photos.slice(0, 3).map((photo) => photo.url);
     const selectedPhotos = cluster.photos.slice(0, 3);
@@ -833,6 +886,14 @@ async function generateDiaryFromFiles(files) {
 
   state.generatedDiary = entries;
   state.diaryUnlocked = true;
+  saveLastDiarySnapshot({
+    tripId: state.tripId,
+    title: state.trip.title,
+    date: state.trip.date,
+    region: state.trip.region,
+    entries: state.generatedDiary,
+    photoUrls: state.photoUrls,
+  });
   updateNavButtons();
   renderTimeline(entries);
   setScreen('diary');
@@ -862,11 +923,11 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
             <div class="timeline-dot"></div>
           </div>
           <div class="timeline-card">
+            <div class="timeline-section">
+              <p class="timeline-section-label">${entry.dateLabel || ''}</p>
+              <p class="timeline-section-time">${entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time}</p>
+            </div>
             <div class="timeline-meta">
-              <div class="timeline-time-stack">
-                <p class="timeline-date">${entry.dateLabel || ''}</p>
-                <p class="timeline-time">${entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time}</p>
-              </div>
               <button class="timeline-button" type="button" data-view-map="${index}">지도에서 보기</button>
             </div>
             <h3 class="timeline-place">${entry.place}</h3>
@@ -898,15 +959,14 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
 
 function syncCreateFields() {
   const stored = loadCreateFormState();
-  elements.tripTitle.value = stored.title || state.trip.title || '';
+  elements.tripTitle.value = '';
   elements.tripDate.value = stored.date || state.trip.date;
-  elements.tripRegion.value = stored.region || state.trip.region || '';
+  elements.tripRegion.value = '';
 }
 
 function saveCreateFormState() {
   if (!window.localStorage) return;
   const payload = {
-    title: elements.tripTitle?.value || '',
     date: elements.tripDate?.value || '',
     region: elements.tripRegion?.value || '',
   };
@@ -1115,6 +1175,12 @@ function bootstrap() {
   elements.tripTitle.addEventListener('input', saveCreateFormState);
   elements.tripDate.addEventListener('input', saveCreateFormState);
   elements.tripRegion.addEventListener('input', saveCreateFormState);
+  elements.tripTitle.addEventListener('focus', () => {
+    elements.tripTitle.removeAttribute('readonly');
+  });
+  elements.tripRegion.addEventListener('focus', () => {
+    elements.tripRegion.removeAttribute('readonly');
+  });
   elements.startRecording.addEventListener('click', startRecording);
   elements.endRecording.addEventListener('click', endRecording);
   elements.photoImportButton.addEventListener('click', () => {
@@ -1173,6 +1239,7 @@ function bootstrap() {
       state.diaryUnlocked = false;
       state.tripId = null;
       clearLastTripId();
+      clearLastDiarySnapshot();
       state.acceptedPhotoIds = new Set();
       state.rejectedPhotoIds = new Set();
       renderTimeline();
