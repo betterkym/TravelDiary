@@ -81,7 +81,7 @@ button {
 .home-topline {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
 }
 
@@ -156,6 +156,12 @@ button {
   line-height: 1.45;
 }
 
+.hero-copy .hero-lead {
+  max-width: 28rem;
+  font-size: 0.94rem;
+  font-weight: 900;
+}
+
 .card {
   background: var(--card);
   border: 1px solid rgba(255, 255, 255, 0.7);
@@ -207,6 +213,7 @@ input {
   -webkit-appearance: none;
   display: block;
   width: 100%;
+  max-width: 100%;
   min-height: 52px;
   border: 1px solid rgba(111, 80, 66, 0.16);
   border-radius: 16px;
@@ -218,7 +225,16 @@ input {
 }
 
 input[type="date"] {
+  display: block;
   min-height: 52px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+input[type="date"]::-webkit-date-and-time-value {
+  min-height: 1.2em;
+  text-align: left;
 }
 
 input:focus {

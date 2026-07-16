@@ -1,5 +1,9 @@
 const MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || '';
 const STORAGE_KEY = 'travel-diary.trips.v1';
+const TRIP_DB_NAME = 'travel-diary-db';
+const TRIP_DB_VERSION = 1;
+const TRIP_DB_STORE = 'state';
+const TRIP_DB_KEY = 'trips';
 const API_BASE_URL = window.API_BASE_URL || '';
 const PHOTO_SPOT_RADIUS_M = 120;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
@@ -233,6 +237,35 @@ function getTripByDateKey(dateKey) {
   return state.savedTrips.find((trip) => normalizeDateKey(trip.date) === dateKey) || null;
 }
 
+function selectCalendarDate(dateKey) {
+  const trip = getTripByDateKey(dateKey);
+  if (trip) {
+    pickTrip(trip.id);
+    renderTripOnMap(trip);
+    closeCalendar();
+    return;
+  }
+
+  elements.tripDate.value = dateKey;
+  saveCreateFormState();
+  state.trip.date = dateKey;
+
+  const selectedTrip = getSelectedTrip();
+  if (selectedTrip) {
+    selectedTrip.date = dateKey;
+    if (state.activeTrip?.id === selectedTrip.id) {
+      state.activeTrip.date = dateKey;
+    }
+    upsertSavedTrip(selectedTrip);
+  }
+
+  updateTripTexts();
+  renderTripHistory();
+  renderCalendar();
+  closeCalendar();
+  showToast(`${formatDateLabel(dateKey)} 날짜로 선택했어요.`);
+}
+
 function getCalendarMonthDate() {
   if (state.calendarMonth instanceof Date && !Number.isNaN(state.calendarMonth.getTime())) {
     return new Date(state.calendarMonth.getFullYear(), state.calendarMonth.getMonth(), 1);
@@ -286,7 +319,7 @@ function renderCalendar() {
   const firstDay = new Date(year, monthIndex, 1);
   const startOffset = firstDay.getDay();
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const selectedDateKey = getSelectedTrip() ? normalizeDateKey(getSelectedTrip().date) : '';
+  const selectedDateKey = normalizeDateKey(getSelectedTrip()?.date || state.trip.date);
   const tripMap = new Map(state.savedTrips.map((trip) => [normalizeDateKey(trip.date), trip]));
 
   elements.calendarMonthLabel.textContent = formatCalendarMonth(monthDate);
@@ -311,18 +344,35 @@ function renderCalendar() {
       <span class="calendar-day-number">${formatCalendarDay(dayDate)}</span>
       <span class="calendar-day-label">${trip ? trip.title : '기록 없음'}</span>
     `;
-    if (trip) {
-      button.addEventListener('click', () => {
-        pickTrip(trip.id);
-        renderTripOnMap(trip);
-        closeCalendar();
-      });
-    } else {
-      button.disabled = true;
+    button.addEventListener('click', () => {
+      selectCalendarDate(dateKey);
+    });
+    if (!trip) {
       button.classList.add('is-muted');
     }
     elements.calendarGrid.appendChild(button);
   }
+}
+
+function normalizeSavedTrip(trip) {
+  return {
+    id: trip.id,
+    title: trip.title || '새 여행',
+    date: trip.date || '',
+    region: trip.region || '미정 지역',
+    createdAt: trip.createdAt || new Date().toISOString(),
+    status: trip.status || 'draft',
+    recording: {
+      startedAt: trip.recording?.startedAt ?? null,
+      endedAt: trip.recording?.endedAt ?? null,
+      elapsed: trip.recording?.elapsed ?? 0,
+      samples: Array.isArray(trip.recording?.samples) ? trip.recording.samples : [],
+      footprints: Array.isArray(trip.recording?.footprints) ? trip.recording.footprints : [],
+      livePhotos: Array.isArray(trip.recording?.livePhotos) ? trip.recording.livePhotos : [],
+    },
+    diary: Array.isArray(trip.diary) ? trip.diary : [],
+    photos: Array.isArray(trip.photos) ? trip.photos : [],
+  };
 }
 
 function readSavedTrips() {
@@ -331,33 +381,98 @@ function readSavedTrips() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((trip) => ({
-      id: trip.id,
-      title: trip.title || '새 여행',
-      date: trip.date || '',
-      region: trip.region || '미정 지역',
-      createdAt: trip.createdAt || new Date().toISOString(),
-      status: trip.status || 'draft',
-      recording: {
-        startedAt: trip.recording?.startedAt ?? null,
-        endedAt: trip.recording?.endedAt ?? null,
-        elapsed: trip.recording?.elapsed ?? 0,
-        samples: Array.isArray(trip.recording?.samples) ? trip.recording.samples : [],
-        footprints: Array.isArray(trip.recording?.footprints) ? trip.recording.footprints : [],
-      },
-      diary: Array.isArray(trip.diary) ? trip.diary : [],
-      photos: Array.isArray(trip.photos) ? trip.photos : [],
-    }));
+    return parsed.map(normalizeSavedTrip);
   } catch {
     return [];
   }
 }
 
-function writeSavedTrips() {
+function stripLocalOnlyImage(value) {
+  return typeof value === 'string' && (value.startsWith('data:') || value.startsWith('blob:')) ? null : value;
+}
+
+function createLightweightTripRecord(trip) {
+  const record = createTripRecord(trip);
+  return {
+    ...record,
+    recording: {
+      ...record.recording,
+      livePhotos: Array.isArray(record.recording.livePhotos)
+        ? record.recording.livePhotos.map((photo) => ({
+            ...photo,
+            dataUrl: stripLocalOnlyImage(photo.dataUrl),
+          }))
+        : [],
+    },
+    diary: record.diary.map((entry) => ({
+      ...entry,
+      image: stripLocalOnlyImage(entry.image),
+      mainPhoto: stripLocalOnlyImage(entry.mainPhoto),
+      photoUrls: Array.isArray(entry.photoUrls) ? entry.photoUrls.map(stripLocalOnlyImage).filter(Boolean) : [],
+    })),
+    photos: record.photos.map((photo) => ({
+      ...photo,
+      dataUrl: stripLocalOnlyImage(photo.dataUrl),
+      url: stripLocalOnlyImage(photo.url),
+    })),
+  };
+}
+
+function openTripDatabase() {
+  if (!window.indexedDB) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(TRIP_DB_NAME, TRIP_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(TRIP_DB_STORE)) {
+        db.createObjectStore(TRIP_DB_STORE, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function writeSavedTripsToIndexedDb(trips) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.savedTrips));
+    const db = await openTripDatabase();
+    if (!db) return;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(TRIP_DB_STORE, 'readwrite');
+      tx.objectStore(TRIP_DB_STORE).put({ id: TRIP_DB_KEY, trips });
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch (error) {
+    console.warn('IndexedDB 저장 실패:', error);
+  }
+}
+
+async function readSavedTripsFromIndexedDb() {
+  try {
+    const db = await openTripDatabase();
+    if (!db) return [];
+    const result = await new Promise((resolve, reject) => {
+      const tx = db.transaction(TRIP_DB_STORE, 'readonly');
+      const request = tx.objectStore(TRIP_DB_STORE).get(TRIP_DB_KEY);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return Array.isArray(result?.trips) ? result.trips.map(normalizeSavedTrip) : [];
+  } catch (error) {
+    console.warn('IndexedDB 복원 실패:', error);
+    return [];
+  }
+}
+
+function writeSavedTrips() {
+  writeSavedTripsToIndexedDb(state.savedTrips);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.savedTrips.map(createLightweightTripRecord)));
   } catch {
-    // Ignore storage quota errors in the MVP.
+    // Ignore storage quota errors in the MVP. IndexedDB still keeps the full copy.
   }
 }
 
@@ -374,6 +489,7 @@ function createTripRecord(trip) {
       elapsed: trip.recording?.elapsed ?? 0,
       samples: trip.recording?.samples ?? [],
       footprints: trip.recording?.footprints ?? [],
+      livePhotos: trip.recording?.livePhotos ?? [],
     },
     diary: trip.diary ?? [],
     photos: trip.photos ?? [],
@@ -1160,6 +1276,10 @@ function startRecording() {
     return;
   }
 
+  if (!state.activeTrip) {
+    ensureActiveTripForMap();
+  }
+
   clearLiveMarkers();
   state.locationSamples = [];
   state.generatedDiary = null;
@@ -1171,6 +1291,14 @@ function startRecording() {
   state.recordingBonusSeconds = 0;
   state.recordingElapsed = 0;
   if (state.activeTrip) {
+    state.activeTrip.recording = {
+      startedAt: null,
+      endedAt: null,
+      elapsed: 0,
+      samples: [],
+      footprints: [],
+      livePhotos: state.activeTrip.recording?.livePhotos ?? [],
+    };
     state.activeTrip.recording.startedAt = new Date(state.recordingStartedAt).toISOString();
     state.activeTrip.status = 'recording';
     upsertSavedTrip(state.activeTrip);
@@ -2069,6 +2197,7 @@ function createTrip() {
       elapsed: 0,
       samples: [],
       footprints: [],
+      livePhotos: [],
     },
     diary: [],
     photos: [],
@@ -2127,6 +2256,52 @@ function createTrip() {
       console.error(error);
       showToast('여행 생성 API 연결은 실패했지만, 로컬 화면은 사용할 수 있어요.');
     });
+}
+
+function createDraftTripFromCurrentFields() {
+  const trip = {
+    id: crypto.randomUUID ? crypto.randomUUID() : `trip_${Math.random().toString(16).slice(2)}`,
+    title: elements.tripTitle.value.trim() || state.trip.title || '새 여행',
+    date: elements.tripDate.value || state.trip.date || formatLocalDate(new Date()),
+    region: elements.tripRegion.value.trim() || state.trip.region || '미정 지역',
+    createdAt: new Date().toISOString(),
+    status: 'draft',
+    recording: {
+      startedAt: null,
+      endedAt: null,
+      elapsed: 0,
+      samples: [],
+      footprints: [],
+      livePhotos: [],
+    },
+    diary: [],
+    photos: [],
+  };
+  state.savedTrips.unshift(trip);
+  state.savedTrips = dedupeTripsByDate(state.savedTrips);
+  state.selectedTripId = trip.id;
+  upsertSavedTrip(trip);
+  return trip;
+}
+
+function ensureActiveTripForMap() {
+  let trip = getSelectedTrip();
+  if (!trip) {
+    trip = createDraftTripFromCurrentFields();
+  }
+  state.activeTripId = trip.id;
+  state.activeTrip = trip;
+  state.selectedTripId = trip.id;
+  state.trip = {
+    title: trip.title,
+    date: trip.date,
+    region: trip.region,
+  };
+  state.locationSamples = trip.recording?.samples ?? [];
+  updateTripTexts();
+  renderTripHistory();
+  setMapState(getTripMapState(trip));
+  return trip;
 }
 
 // 홈 화면 두 갈래: 실시간 기록 / 사진 업로드
@@ -2232,8 +2407,11 @@ function handleNav(target) {
     return;
   }
   if (target === 'diary' && !state.diaryUnlocked) return;
-  const trip = target === 'map' || target === 'diary' ? syncSelectedTripView() : null;
+  let trip = target === 'map' || target === 'diary' ? syncSelectedTripView() : null;
   closeCalendar();
+  if (target === 'map') {
+    trip = ensureActiveTripForMap();
+  }
   setScreen(target);
   if (target === 'map') {
     if (trip) renderTripOnMap(trip);
@@ -2382,6 +2560,20 @@ function bootstrap() {
   state.selectedTripId = state.savedTrips[0]?.id || null;
   syncCreateFields();
   syncSelectedTripView();
+  readSavedTripsFromIndexedDb().then((indexedTrips) => {
+    if (!indexedTrips.length) return;
+    const selectedId = state.selectedTripId;
+    state.savedTrips = dedupeTripsByDate([...indexedTrips, ...state.savedTrips]);
+    state.selectedTripId = selectedId && state.savedTrips.some((trip) => trip.id === selectedId)
+      ? selectedId
+      : state.savedTrips[0]?.id || null;
+    syncSelectedTripView();
+    if (state.screen === 'map') {
+      const trip = ensureActiveTripForMap();
+      renderTripOnMap(trip);
+    }
+    if (state.calendarOpen) renderCalendar();
+  });
   if (!state.savedTrips.length) {
     renderTimeline(state.sampleTimeline);
   }
