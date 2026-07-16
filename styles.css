@@ -536,6 +536,25 @@ textarea:focus-visible {
   background: #c56e4f;
 }
 
+.footprint-marker--spot {
+  width: 34px;
+  height: 34px;
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  background: #fff7ed;
+  box-shadow: 0 8px 20px rgba(88, 58, 43, 0.24);
+}
+
+.footprint-marker--spot span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .current-location-marker {
   width: 22px;
   height: 22px;

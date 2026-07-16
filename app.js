@@ -281,7 +281,9 @@ function getVisibleDiaryEntries(trip) {
 function filterTripForDate(trip, dateKey = state.diaryDateFilter) {
   const filterKey = normalizeDateKey(dateKey);
   if (!trip || !filterKey) return trip;
-  const diary = getVisibleDiaryEntries(trip);
+  const diary = (trip.diary || [])
+    .map((entry, index) => ({ ...entry, sourceIndex: index }))
+    .filter((entry) => getEntryDateKey(entry) === filterKey);
   const photos = (trip.photos || []).filter((photo) => normalizeDateKey(photo.takenAt || photo.taken_at) === filterKey);
   const samples = (trip.recording?.samples || []).filter((sample) => normalizeDateKey(sample.timestamp) === filterKey);
   const footprints = (trip.recording?.footprints || []).filter((point) => normalizeDateKey(point.timestamp) === filterKey);

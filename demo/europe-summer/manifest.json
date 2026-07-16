@@ -1,7 +1,7 @@
 {
   "id": "demo_europe_summer",
   "title": "유럽 시연 여행",
-  "date": "2025-08-11",
+  "date": "2025-07-18",
   "region": "스페인 · 프랑스",
   "basePath": "/demo/europe-summer/",
   "photos": [
@@ -9,7 +9,7 @@
       "id": "demo_madrid_flag_a",
       "src": "madrid-flag-a.jpg",
       "fileName": "IMG_0302 2.JPG",
-      "takenAt": "2025-08-11T09:10:00+02:00",
+      "takenAt": "2025-08-11T19:35:41+02:00",
       "lat": 40.4148,
       "lng": -3.6922,
       "place": "마드리드 도심"
@@ -18,7 +18,7 @@
       "id": "demo_madrid_flag_b",
       "src": "madrid-flag-b.jpg",
       "fileName": "IMG_0302.JPG",
-      "takenAt": "2025-08-11T09:10:35+02:00",
+      "takenAt": "2025-08-11T19:36:16+02:00",
       "lat": 40.41482,
       "lng": -3.69218,
       "place": "마드리드 도심"
@@ -27,7 +27,7 @@
       "id": "demo_paris_flowers_a",
       "src": "paris-flowers-a.jpg",
       "fileName": "IMG_0304 2.JPG",
-      "takenAt": "2025-08-11T11:30:00+02:00",
+      "takenAt": "2025-07-28T20:04:39+02:00",
       "lat": 48.87858888888889,
       "lng": 2.3397805555555555,
       "place": "파리 꽃길"
@@ -36,7 +36,7 @@
       "id": "demo_paris_flowers_b",
       "src": "paris-flowers-b.jpg",
       "fileName": "IMG_0304.JPG",
-      "takenAt": "2025-08-11T11:30:40+02:00",
+      "takenAt": "2025-07-28T20:05:19+02:00",
       "lat": 48.87859,
       "lng": 2.33979,
       "place": "파리 꽃길"
@@ -45,7 +45,7 @@
       "id": "demo_cafe_break_a",
       "src": "cafe-break-a.jpg",
       "fileName": "IMG_0306 2.JPG",
-      "takenAt": "2025-08-11T13:00:00+02:00",
+      "takenAt": "2025-07-23T16:26:01+02:00",
       "lat": 48.85506111111111,
       "lng": 2.3261805555555553,
       "place": "생제르맹 카페"
@@ -54,7 +54,7 @@
       "id": "demo_cafe_break_b",
       "src": "cafe-break-b.jpg",
       "fileName": "IMG_0306.JPG",
-      "takenAt": "2025-08-11T13:00:50+02:00",
+      "takenAt": "2025-07-23T16:26:51+02:00",
       "lat": 48.85507,
       "lng": 2.32619,
       "place": "생제르맹 카페"
@@ -63,7 +63,7 @@
       "id": "demo_marseille_coast_a",
       "src": "marseille-coast-a.jpg",
       "fileName": "IMG_0305 2.JPG",
-      "takenAt": "2025-08-11T15:20:00+02:00",
+      "takenAt": "2025-07-26T18:07:47+02:00",
       "lat": 43.282066666666665,
       "lng": 5.308472222222222,
       "place": "마르세유 해안길"
@@ -72,7 +72,7 @@
       "id": "demo_marseille_coast_b",
       "src": "marseille-coast-b.jpg",
       "fileName": "IMG_0305.JPG",
-      "takenAt": "2025-08-11T15:20:45+02:00",
+      "takenAt": "2025-07-26T18:08:32+02:00",
       "lat": 43.28207,
       "lng": 5.30848,
       "place": "마르세유 해안길"
@@ -81,7 +81,7 @@
       "id": "demo_icecream_stop_a",
       "src": "icecream-stop-a.jpg",
       "fileName": "IMG_0307 2.JPG",
-      "takenAt": "2025-08-11T17:10:00+02:00",
+      "takenAt": "2025-07-21T18:36:07+02:00",
       "lat": 48.8732,
       "lng": 2.330686111111111,
       "place": "파리 아이스크림 숍"
@@ -90,7 +90,7 @@
       "id": "demo_icecream_stop_b",
       "src": "icecream-stop-b.jpg",
       "fileName": "IMG_0307.JPG",
-      "takenAt": "2025-08-11T17:10:45+02:00",
+      "takenAt": "2025-07-21T18:36:52+02:00",
       "lat": 48.87321,
       "lng": 2.33069,
       "place": "파리 아이스크림 숍"
@@ -99,7 +99,7 @@
       "id": "demo_hotel_regina_a",
       "src": "hotel-regina-a.jpg",
       "fileName": "IMG_0303 2.JPG",
-      "takenAt": "2025-08-11T20:45:00+02:00",
+      "takenAt": "2025-07-31T22:45:37+02:00",
       "lat": 48.86382777777778,
       "lng": 2.3319444444444444,
       "place": "호텔 레지나 앞"
@@ -108,7 +108,7 @@
       "id": "demo_hotel_regina_b",
       "src": "hotel-regina-b.jpg",
       "fileName": "IMG_0303.JPG",
-      "takenAt": "2025-08-11T20:45:45+02:00",
+      "takenAt": "2025-07-31T22:46:22+02:00",
       "lat": 48.86383,
       "lng": 2.33195,
       "place": "호텔 레지나 앞"
@@ -117,7 +117,7 @@
       "id": "demo_paris_lounge",
       "src": "paris-lounge.jpg",
       "fileName": "IMG_1262.jpg",
-      "takenAt": "2025-08-11T21:30:00+02:00",
+      "takenAt": "2025-07-18T23:53:27+02:00",
       "lat": 48.87079166666667,
       "lng": 2.2930944444444443,
       "place": "파리 라운지"
