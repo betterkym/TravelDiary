@@ -2428,7 +2428,11 @@ async function generateDiaryFromPhotoData(parsed, options = {}) {
     const placeHint = firstPhoto.demoPlace || firstPhoto.place || '';
     const fallbackPlace = placeHint || `기록 스팟 ${i + 1}`;
     const place = placeHint || await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
-    const photoCount = cluster.photos.length;
+    const realPhotoCount = cluster.photos.length;
+    const demoDisplayCount = Number.isFinite(options.demoPhotoCountBase)
+      ? options.demoPhotoCountBase + (i % 2)
+      : null;
+    const photoCount = demoDisplayCount ? Math.max(realPhotoCount, demoDisplayCount) : realPhotoCount;
     const selectedPhotos = selectRepresentativePhotos(cluster.photos);
     const photoUrls = selectedPhotos.map((photo) => photo.url || photo.dataUrl).filter(Boolean);
     entries.push({
@@ -2594,6 +2598,7 @@ async function startDemoTrip() {
 
     await generateDiaryFromPhotoData(photoData, {
       allowCrossDate: true,
+      demoPhotoCountBase: 7,
       skipDateSync: true,
       successMessage: '시연 사진으로 다이어리를 만들었어요.',
     });
