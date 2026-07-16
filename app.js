@@ -6,6 +6,7 @@ const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 2;
 const PHOTO_SPOT_GAP_MS = 90 * 60 * 1000;
 const PHOTO_LOCATION_MAX_SAMPLE_DISTANCE_M = 30;
+const PHOTO_LOCATION_MATCH_WINDOW_MS = 30 * 60 * 1000;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
 const FOOTPRINT_MIN_GAP_MS = 15 * 1000;
 const FOOTPRINT_MIN_REPEAT_DISTANCE_M = 1;
@@ -318,7 +319,7 @@ function renderCalendar() {
     if (dateKey === selectedDateKey) button.classList.add('is-selected');
     button.innerHTML = `
       <span class="calendar-day-number">${formatCalendarDay(dayDate)}</span>
-      <span class="calendar-day-label">${trip ? trip.title : '湲곕줉 ?놁쓬'}</span>
+      <span class="calendar-day-label">${trip ? trip.title : '기록 없음'}</span>
     `;
     if (trip) {
       button.addEventListener('click', () => {
@@ -441,6 +442,10 @@ function syncSelectedTripView() {
     date: trip.date,
     region: trip.region,
   };
+  if (String(trip.id || '').startsWith('trip_')) {
+    state.tripId = trip.id;
+    saveLastTripId(trip.id);
+  }
   state.generatedDiary = trip.diary && trip.diary.length ? trip.diary : null;
   state.diaryUnlocked = Boolean(state.generatedDiary);
   state.locationSamples = trip.recording?.samples ?? [];
@@ -654,6 +659,9 @@ function findNearestLocationSample(targetTime) {
       best = sample;
     }
   }
+  // 촬영시각이 이동기록과 30분 이상 떨어져 있으면 매칭하지 않는다.
+  // (과거 앨범 사진이 '지금' 위치에 잘못 찍히는 것 방지)
+  if (bestGap > PHOTO_LOCATION_MATCH_WINDOW_MS) return null;
   return best;
 }
 
@@ -1238,16 +1246,14 @@ async function resolvePlaceName(lng, lat, fallbackLabel) {
   }
 }
 
-async function suggestTitleFromLocation(lng, lat) {
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
-  // 사용자가 직접 넣은 제목이 있으면 유지. 비었거나 기본값('새 여행')이면 교체.
+function canAutoTitle() {
+  // 사용자가 직접 넣은 제목이 있으면 유지. 비었거나 기본값('새 여행')이면 교체 가능.
   const current = (state.trip.title || '').trim();
-  if (current && current !== '새 여행') return;
+  return !current || current === '새 여행';
+}
 
-  const placeName = await resolvePlaceName(lng, lat, '');
-  if (!placeName) return;
-  const title = `${placeName.split(',')[0].trim()} 여행`;
-
+function applySuggestedTitle(title) {
+  if (!title) return;
   state.trip.title = title;
   if (elements.tripTitle) elements.tripTitle.value = title;
   if (state.activeTrip) {
@@ -1256,6 +1262,83 @@ async function suggestTitleFromLocation(lng, lat) {
   }
   updateTripTexts();
   renderTripHistory();
+}
+
+async function suggestTitleFromLocation(lng, lat) {
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+  if (!canAutoTitle()) return;
+  const placeName = await resolvePlaceName(lng, lat, '');
+  if (!placeName) return;
+  applySuggestedTitle(`${placeName.split(',')[0].trim()} 여행`);
+}
+
+// 도시(동네보다 넓은) 단위 지명
+async function resolveRegionName(lng, lat) {
+  if (!MAPBOX_ACCESS_TOKEN) return '';
+  try {
+    const endpoint = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json`);
+    endpoint.searchParams.set('access_token', MAPBOX_ACCESS_TOKEN);
+    endpoint.searchParams.set('language', 'ko');
+    endpoint.searchParams.set('types', 'locality,place');
+    endpoint.searchParams.set('limit', '1');
+    const response = await fetch(endpoint.toString());
+    if (!response.ok) return '';
+    const data = await response.json();
+    return data.features?.[0]?.text || '';
+  } catch {
+    return '';
+  }
+}
+
+// 다이어리 전체를 보고 제목 짓기:
+// - 스팟들의 장소명 빈도 + 여행이 하루를 채웠는지 + 시간대를 종합
+// - 동네가 하나면 '연남동에서의 오후', 여러 동네면 도시 단위로 '서울에서의 하루'
+async function suggestTitleFromEntries(entries) {
+  if (!canAutoTitle()) return;
+  const spots = (entries || []).filter((e) => e && (e.place || Array.isArray(e.center)));
+  if (!spots.length) return;
+
+  // 장소명 첫 토큰 빈도 집계
+  const counts = new Map();
+  spots.forEach((e) => {
+    const token = (e.place || '').split(',')[0].trim();
+    if (token && !/^기록 스팟/.test(token)) counts.set(token, (counts.get(token) || 0) + 1);
+  });
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+
+  // 여행의 시간 범위 → 하루/시간대 표현
+  const times = spots
+    .map((e) => (e.timestamp instanceof Date ? e.timestamp : new Date(e.timestamp)))
+    .filter((d) => !Number.isNaN(d.getTime()))
+    .sort((a, b) => a - b);
+  const spanHours = times.length >= 2 ? (times[times.length - 1] - times[0]) / 3600000 : 0;
+  const mid = times.length ? times[Math.floor(times.length / 2)] : null;
+  const h = mid ? mid.getHours() : null;
+  const daypart =
+    h === null ? '' :
+    h < 5 ? '깊은 밤' : h < 11 ? '아침' : h < 15 ? '한낮' : h < 18 ? '오후' : h < 21 ? '저녁' : '밤';
+
+  let anchor = ranked.length ? ranked[0][0] : '';
+  // 동네가 3곳 이상 흩어져 있으면 도시 단위 지명으로 넓힌다 (중심 좌표 기준)
+  if (ranked.length >= 3) {
+    const coords = spots.filter((e) => Array.isArray(e.center));
+    if (coords.length) {
+      const cLng = coords.reduce((a, e) => a + e.center[0], 0) / coords.length;
+      const cLat = coords.reduce((a, e) => a + e.center[1], 0) / coords.length;
+      const region = await resolveRegionName(cLng, cLat);
+      if (region) anchor = region;
+    }
+  }
+  if (!anchor && spots.some((e) => Array.isArray(e.center))) {
+    const first = spots.find((e) => Array.isArray(e.center));
+    anchor = (await resolvePlaceName(first.center[0], first.center[1], '')).split(',')[0].trim();
+  }
+  if (!anchor) return;
+
+  const title = spanHours >= 5
+    ? `${anchor}에서의 하루`
+    : daypart ? `${anchor}에서의 ${daypart}` : `${anchor} 여행`;
+  applySuggestedTitle(title);
 }
 
 function formatTimeLabel(date) {
@@ -1346,11 +1429,85 @@ function diaryFromApi(diary) {
       note: entry.note,
       photoCount,
       photoUrls,
-      center: entry.lat && entry.lng ? [entry.lng, entry.lat] : null,
+      center: Number.isFinite(entry.lng) && Number.isFinite(entry.lat) ? [entry.lng, entry.lat] : null,
       timestamp: entryDate,
       durationMinutes: null,
     };
   });
+}
+
+function savedTripFromServer(item) {
+  if (!item?.trip_id || !item?.diary) return null;
+  const diary = {
+    ...item.diary,
+    title: item.title || item.diary.title || '여행 다이어리',
+  };
+  const entries = diaryFromApi(diary);
+  if (!entries?.length) return null;
+
+  const firstTimestamp = entries.find((entry) => entry.timestamp instanceof Date && !Number.isNaN(entry.timestamp.getTime()))?.timestamp;
+  const date = normalizeDateKey(item.date || firstTimestamp || new Date());
+  const title = item.title || diary.title || '여행 다이어리';
+  const photos = entries
+    .filter((entry) => Array.isArray(entry.center) && Number.isFinite(entry.center[0]) && Number.isFinite(entry.center[1]))
+    .map((entry, index) => ({
+      id: String(entry.photoId || `${item.trip_id}_photo_${index}`),
+      dataUrl: entry.photoUrls?.[0] || null,
+      takenAt: (entry.timestamp instanceof Date && !Number.isNaN(entry.timestamp.getTime())
+        ? entry.timestamp
+        : new Date()).toISOString(),
+      lng: entry.center[0],
+      lat: entry.center[1],
+    }));
+
+  return {
+    id: item.trip_id,
+    title,
+    date,
+    region: item.region || '미정 지역',
+    createdAt: firstTimestamp ? firstTimestamp.toISOString() : new Date().toISOString(),
+    status: 'completed',
+    recording: {
+      startedAt: null,
+      endedAt: null,
+      elapsed: 0,
+      samples: [],
+      footprints: photos.map((photo) => ({
+        lng: photo.lng,
+        lat: photo.lat,
+        timestamp: new Date(photo.takenAt).getTime(),
+      })),
+    },
+    diary: entries,
+    photos,
+  };
+}
+
+async function syncServerTrips() {
+  const response = await fetch(buildApiUrl('/api/trips'));
+  if (!response.ok) return 0;
+  const payload = await response.json();
+  const serverTrips = Array.isArray(payload?.trips)
+    ? payload.trips.map(savedTripFromServer).filter(Boolean)
+    : [];
+  if (!serverTrips.length) return 0;
+
+  for (let i = serverTrips.length - 1; i >= 0; i -= 1) {
+    upsertSavedTrip(serverTrips[i]);
+  }
+
+  const lastTripId = loadLastTripId();
+  const lastTrip = lastTripId ? state.savedTrips.find((trip) => trip.id === lastTripId) : null;
+  const selectedStillExists = state.savedTrips.some((trip) => trip.id === state.selectedTripId);
+  if (lastTrip) {
+    state.selectedTripId = lastTrip.id;
+  } else if (!selectedStillExists) {
+    state.selectedTripId = state.savedTrips[0]?.id || null;
+  }
+
+  syncSelectedTripView();
+  if (state.calendarOpen) renderCalendar();
+  return serverTrips.length;
 }
 
 async function restoreLastTrip() {
@@ -1465,11 +1622,8 @@ async function generateDiaryFromBackend() {
     upsertSavedTrip(state.activeTrip);
     renderTripOnMap(state.activeTrip);
   }
-  // 위치 기반 자동 제목 (사진 첫 스팟 기준). 실패 시 백엔드 제목으로 폴백.
-  const firstEntry = entries.find((e) => Array.isArray(e.center));
-  if (firstEntry) {
-    await suggestTitleFromLocation(firstEntry.center[0], firstEntry.center[1]);
-  }
+  // 다이어리 전체(장소 빈도·시간 범위)를 보고 자동 제목. 실패 시 백엔드 제목으로 폴백.
+  await suggestTitleFromEntries(entries);
   if (!(state.trip.title || '').trim() && data.title) {
     state.trip.title = data.title;
     if (state.activeTrip) { state.activeTrip.title = data.title; upsertSavedTrip(state.activeTrip); }
@@ -1632,11 +1786,8 @@ async function generateDiaryFromPhotoData(parsed) {
   const photoCoordinates = photoData.map((photo) => [photo.lng, photo.lat]);
   setRouteLine(photoCoordinates);
 
-  // 위치 기반 자동 제목 (첫 사진 기준)
-  const firstPhotoPoint = photoData.find((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat));
-  if (firstPhotoPoint) {
-    await suggestTitleFromLocation(firstPhotoPoint.lng, firstPhotoPoint.lat);
-  }
+  // 다이어리 전체(장소 빈도·시간 범위)를 보고 자동 제목
+  await suggestTitleFromEntries(entries);
 
   updateNavButtons();
   renderTripHistory();
@@ -1960,11 +2111,16 @@ async function handleLivePhotoCapture(files) {
     try {
       const photo = await parsePhotoFile(file);
       const estimated = estimatePhotoLocation(photo);
+      // 현재 위치 폴백은 '방금 찍은 사진'(10분 이내)일 때만 허용.
+      // 과거 앨범 사진은 자기 위치 정보가 없으면 현재 위치에 찍지 않는다.
+      const isFresh =
+        photo.takenAt instanceof Date &&
+        Date.now() - photo.takenAt.getTime() < 10 * 60 * 1000;
       const lngLat = estimated
         ? [estimated.lng, estimated.lat]
-        : getCurrentLngLat();
+        : isFresh ? getCurrentLngLat() : null;
       if (!lngLat) {
-        showToast('사진에 위치 정보가 없고 현재 위치도 아직 못 잡았어요.');
+        showToast(`'${photo.fileName || '사진'}'에 위치 정보가 없어 지도에 표시하지 못했어요.`);
         continue;
       }
       addLivePhotoMarker(lngLat, photo.dataUrl);
@@ -2284,9 +2440,15 @@ function bootstrap() {
     });
   }
 
-  restoreLastTrip().catch((error) => {
-    console.error(error);
-  });
+  syncServerTrips()
+    .catch((error) => {
+      console.warn('failed to sync server trips', error);
+    })
+    .finally(() => {
+      restoreLastTrip().catch((error) => {
+        console.error(error);
+      });
+    });
 }
 
 // ============================================================
@@ -2321,6 +2483,230 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// ---------- 이징 ----------
+function easeOutBack(t) {
+  const c1 = 1.70158; const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+function easeInExpo(t) { return t <= 0 ? 0 : Math.pow(2, 10 * t - 10); }
+function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+
+// 시드 기반 의사난수 (프레임마다 같은 별/얼룩 위치 유지)
+function seededRand(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+}
+
+// ---------- 배경음악: WebAudio 로 직접 합성한 로파이 루프 (저작권 프리) ----------
+function buildMemoryTrack(audioCtx, destination, totalSec) {
+  const master = audioCtx.createGain();
+  master.gain.value = 0.0001;
+  const warm = audioCtx.createBiquadFilter();
+  warm.type = 'lowpass';
+  warm.frequency.value = 1500;
+  master.connect(warm);
+  warm.connect(destination);
+
+  const t0 = audioCtx.currentTime + 0.05;
+  // 페이드 인/아웃
+  master.gain.setValueAtTime(0.0001, t0);
+  master.gain.exponentialRampToValueAtTime(0.55, t0 + 1.2);
+  master.gain.setValueAtTime(0.55, t0 + Math.max(1.3, totalSec - 1.6));
+  master.gain.exponentialRampToValueAtTime(0.0001, t0 + totalSec);
+
+  // 코드 진행: Cmaj7 → Am7 → Fmaj7 → G7 (부드러운 여행 무드)
+  const chords = [
+    [261.63, 329.63, 392.0, 493.88],
+    [220.0, 261.63, 329.63, 392.0],
+    [174.61, 220.0, 261.63, 329.63],
+    [196.0, 246.94, 293.66, 349.23],
+  ];
+  const barDur = 2.75; // ≈87bpm 4/4
+  const bars = Math.ceil(totalSec / barDur) + 1;
+
+  for (let bar = 0; bar < bars; bar += 1) {
+    const chord = chords[bar % chords.length];
+    const barStart = t0 + bar * barDur;
+
+    // 패드 (따뜻한 삼각파, 느린 어택)
+    chord.forEach((freq, vi) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, barStart);
+      g.gain.exponentialRampToValueAtTime(vi === 0 ? 0.055 : 0.04, barStart + 0.5);
+      g.gain.setValueAtTime(0.04, barStart + barDur - 0.5);
+      g.gain.exponentialRampToValueAtTime(0.0001, barStart + barDur + 0.2);
+      osc.connect(g); g.connect(master);
+      osc.start(barStart); osc.stop(barStart + barDur + 0.3);
+    });
+
+    // 아르페지오 플럭 (한 옥타브 위, 8분음)
+    for (let step = 0; step < 8; step += 1) {
+      if (step % 4 === 3) continue; // 살짝 쉼표로 여유
+      const noteStart = barStart + (step * barDur) / 8;
+      const freq = chord[step % chord.length] * 2;
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, noteStart);
+      g.gain.exponentialRampToValueAtTime(0.05, noteStart + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.4);
+      osc.connect(g); g.connect(master);
+      osc.start(noteStart); osc.stop(noteStart + 0.5);
+    }
+
+    // 소프트 킥 (바 시작, 낮게 툭)
+    const kick = audioCtx.createOscillator();
+    kick.type = 'sine';
+    kick.frequency.setValueAtTime(105, barStart);
+    kick.frequency.exponentialRampToValueAtTime(42, barStart + 0.12);
+    const kg = audioCtx.createGain();
+    kg.gain.setValueAtTime(0.11, barStart);
+    kg.gain.exponentialRampToValueAtTime(0.0001, barStart + 0.22);
+    kick.connect(kg); kg.connect(master);
+    kick.start(barStart); kick.stop(barStart + 0.3);
+  }
+
+  // 비닐 노이즈 (아주 작게, 질감)
+  const noiseBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 2, audioCtx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i += 1) nd[i] = (Math.random() * 2 - 1) * 0.5;
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = noiseBuf; noise.loop = true;
+  const nf = audioCtx.createBiquadFilter();
+  nf.type = 'lowpass'; nf.frequency.value = 900;
+  const ng = audioCtx.createGain(); ng.gain.value = 0.012;
+  noise.connect(nf); nf.connect(ng); ng.connect(master);
+  noise.start(t0); noise.stop(t0 + totalSec);
+}
+
+// ---------- 지구본 씬 ----------
+function drawGlobeScene(ctx, W, H, p, pinLabel) {
+  // 우주 배경
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a0f24');
+  bg.addColorStop(1, '#1c2447');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // 별 (시드 고정 + 반짝임)
+  const rand = seededRand(77);
+  for (let i = 0; i < 130; i += 1) {
+    const x = rand() * W; const y = rand() * H;
+    const size = 0.6 + rand() * 1.8;
+    const tw = 0.45 + 0.55 * Math.abs(Math.sin(p * 12 + i));
+    ctx.fillStyle = `rgba(255,255,255,${0.35 * tw})`;
+    ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
+  }
+
+  const cx = W / 2; const cy = 560; const R = 250;
+  const rot = p * 2.2; // 지구 자전
+  // 핀의 구면 위치 (자전에 따라 이동, 후반에 정면에 옴)
+  const pinAngle = 1.15 - rot; // 라디안
+  const pinX = cx + Math.sin(pinAngle) * R * 0.62;
+  const pinY = cy - R * 0.28;
+  const pinVisible = Math.cos(pinAngle) > -0.15;
+
+  // 줌: 마지막 28% 동안 핀으로 급확대
+  const zp = p < 0.72 ? 0 : easeInExpo((p - 0.72) / 0.28);
+  const scale = 1 + zp * 22;
+  ctx.save();
+  ctx.translate(pinX, pinY);
+  ctx.scale(scale, scale);
+  ctx.translate(-pinX, -pinY);
+
+  // 대기 글로우
+  const glow = ctx.createRadialGradient(cx, cy, R * 0.9, cx, cy, R * 1.35);
+  glow.addColorStop(0, 'rgba(96,150,255,0.32)');
+  glow.addColorStop(1, 'rgba(96,150,255,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(cx, cy, R * 1.35, 0, Math.PI * 2); ctx.fill();
+
+  // 구 본체
+  const sphere = ctx.createRadialGradient(cx - R * 0.4, cy - R * 0.45, R * 0.1, cx, cy, R);
+  sphere.addColorStop(0, '#5f8fe8');
+  sphere.addColorStop(0.55, '#2c5cc4');
+  sphere.addColorStop(1, '#122b6e');
+  ctx.fillStyle = sphere;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+
+  // 구 안쪽 클립
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+
+  // 대륙 느낌 얼룩 (자전에 따라 흐름)
+  const landRand = seededRand(42);
+  ctx.fillStyle = 'rgba(126, 217, 154, 0.5)';
+  for (let i = 0; i < 9; i += 1) {
+    const baseA = landRand() * Math.PI * 2;
+    const bandY = cy + (landRand() - 0.5) * R * 1.4;
+    const a = baseA + rot;
+    const lx = cx + Math.sin(a) * R * 0.9;
+    const depth = Math.cos(a); // 뒤로 돌아가면 안 보임
+    if (depth < 0.05) continue;
+    const w = (40 + landRand() * 95) * depth;
+    const h2 = 30 + landRand() * 70;
+    ctx.beginPath();
+    ctx.ellipse(lx, bandY, w, h2, landRand() * 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 경선 그리드 (회전)
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 1.4;
+  for (let i = 0; i < 7; i += 1) {
+    const a = (i / 7) * Math.PI + rot;
+    const rx = Math.abs(Math.cos(a)) * R;
+    if (rx < 2) continue;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, R, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  // 위선
+  for (let i = 1; i < 5; i += 1) {
+    const yy = cy - R + (i / 5) * 2 * R;
+    const rx = Math.sqrt(Math.max(0, R * R - (yy - cy) * (yy - cy)));
+    ctx.beginPath(); ctx.ellipse(cx, yy, rx, rx * 0.24, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+
+  // 핀 + 펄스 링
+  if (pinVisible) {
+    const pulse = 10 + 7 * Math.abs(Math.sin(p * 9));
+    ctx.strokeStyle = 'rgba(255,120,90,0.65)';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(pinX, pinY, pulse, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = '38px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('📍', pinX, pinY + 4);
+  }
+  ctx.restore();
+
+  // 타이틀 텍스트 (줌 전까지)
+  if (zp < 0.4) {
+    ctx.globalAlpha = 1 - zp / 0.4;
+    ctx.fillStyle = 'rgba(255,255,255,0.94)';
+    ctx.textAlign = 'center';
+    ctx.font = '700 40px Georgia, serif';
+    ctx.fillText(pinLabel || '여행의 기억', W / 2, 175);
+    ctx.font = '500 24px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText('그날의 발자취를 따라', W / 2, 218);
+    ctx.globalAlpha = 1;
+  }
+
+  // 줌 마지막: 화이트 플래시로 전환
+  if (zp > 0.75) {
+    ctx.fillStyle = `rgba(253,246,238,${(zp - 0.75) / 0.25})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+// ---------- 추억 영상 메인 ----------
 async function createMemoryVideo() {
   const entries = (state.generatedDiary || []).filter((e) => Array.isArray(e.center));
   if (!entries.length) {
@@ -2332,30 +2718,28 @@ async function createMemoryVideo() {
     showToast('이 브라우저는 영상 만들기를 지원하지 않아요.');
     return;
   }
-  if (!window.confirm('추억 영상을 만들어 다운로드할까요? (10초 정도 걸려요)')) return;
+  if (!window.confirm('추억 영상을 만들어 다운로드할까요? (배경음악 포함 · 15초 정도 걸려요)')) return;
 
   const button = elements.memoryVideoButton;
   if (button) { button.disabled = true; button.textContent = '🎬 만드는 중…'; }
-  showToast('영상을 만드는 중이에요…');
+  showToast('영상을 만드는 중이에요… 화면을 그대로 두세요');
 
+  let audioCtx = null;
   try {
-    // 사진 미리 로드 (실패한 건 장소 카드로 대체)
     const images = await Promise.all(
       entries.map((e) => loadImageForCanvas(e.mainPhoto || (e.photoUrls && e.photoUrls[0]) || '')),
     );
 
-    // 경로 좌표: GPS 샘플이 있으면 상세 경로, 없으면 스팟 좌표
     const trip = getSelectedTrip();
     const samples = trip?.recording?.samples || [];
     const rawPath = samples.length >= 2
       ? samples.map((s) => [s.lng, s.lat])
       : entries.map((e) => e.center);
 
-    // 캔버스 좌표로 정규화 (하단 미니맵 영역)
     const W = 720; const H = 1280;
-    const mapArea = { x: 70, y: 880, w: W - 140, h: 300 };
-    const lngs = rawPath.map((p) => p[0]);
-    const lats = rawPath.map((p) => p[1]);
+    const mapArea = { x: 70, y: 900, w: W - 140, h: 280 };
+    const lngs = rawPath.map((pt) => pt[0]);
+    const lats = rawPath.map((pt) => pt[1]);
     const minLng = Math.min(...lngs); const maxLng = Math.max(...lngs);
     const minLat = Math.min(...lats); const maxLat = Math.max(...lats);
     const spanLng = Math.max(maxLng - minLng, 1e-6);
@@ -2367,21 +2751,33 @@ async function createMemoryVideo() {
     const path = rawPath.map(toXY);
     const spotXY = entries.map((e) => toXY(e.center));
 
-    // 타임라인 구성: 인트로 → (걷기+사진)*n → 아웃트로
-    const segs = [{ type: 'intro', dur: 1800 }];
-    entries.forEach((e, i) => {
-      segs.push({ type: 'walk', dur: i === 0 ? 900 : 1300, idx: i });
-      segs.push({ type: 'photo', dur: 2400, idx: i });
+    // 타임라인: 지구본 → (사진 fly-in → 감상 → 수납)*n → 아웃트로
+    const GLOBE = 3200; const FLY = 750; const HOLD = 2200; const TUCK = 380; const OUTRO = 3000;
+    const segs = [{ type: 'globe', dur: GLOBE }];
+    entries.forEach((_, i) => {
+      segs.push({ type: 'fly', dur: FLY, idx: i });
+      segs.push({ type: 'hold', dur: HOLD, idx: i });
+      segs.push({ type: 'tuck', dur: TUCK, idx: i });
     });
-    segs.push({ type: 'outro', dur: 2000 });
+    segs.push({ type: 'outro', dur: OUTRO });
     const total = segs.reduce((a, s) => a + s.dur, 0);
 
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
 
-    const stream = canvas.captureStream(30);
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+    // 영상 + 오디오 트랙 합성
+    const videoStream = canvas.captureStream(30);
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+    const audioDest = audioCtx.createMediaStreamDestination();
+    buildMemoryTrack(audioCtx, audioDest, total / 1000 + 0.3);
+    const mixed = new MediaStream([
+      ...videoStream.getVideoTracks(),
+      ...audioDest.stream.getAudioTracks(),
+    ]);
+
+    const recorder = new MediaRecorder(mixed, { mimeType: mime, videoBitsPerSecond: 6_000_000 });
     const chunks = [];
     recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     const done = new Promise((resolve) => { recorder.onstop = resolve; });
@@ -2389,64 +2785,94 @@ async function createMemoryVideo() {
 
     const title = state.trip.title || '여행 다이어리';
     const dateText = state.trip.date ? formatDateLabel(state.trip.date) : '';
+    const spotT = entries.map((_, i) => (entries.length === 1 ? 1 : i / (entries.length - 1)));
 
     const pathPointAt = (t) => {
-      // t: 0~1 → 경로 위 좌표
       if (path.length === 1) return path[0];
-      const f = t * (path.length - 1);
+      const f = Math.max(0, Math.min(1, t)) * (path.length - 1);
       const i = Math.min(Math.floor(f), path.length - 2);
       const r = f - i;
       return [path[i][0] + (path[i + 1][0] - path[i][0]) * r, path[i][1] + (path[i + 1][1] - path[i][1]) * r];
     };
-    // 각 스팟의 경로상 위치(0~1): 스팟 순서대로 균등 배분
-    const spotT = entries.map((_, i) => (entries.length === 1 ? 1 : i / (entries.length - 1)));
 
-    const drawFrame = (elapsed) => {
-      // 배경
+    // 폴라로이드 카드 (fly-in 보간용 파라미터로 그리기)
+    const CARD = { w: 560, h: 560, x: (W - 560) / 2, y: 250 };
+    const drawPolaroid = (idx, k, alpha, kenburns) => {
+      const e = entries[idx];
+      const img = images[idx];
+      const [sx, sy] = spotXY[idx];
+      // k: 0(스팟 위 점) → 1(중앙 카드)
+      const cw = 40 + (CARD.w - 40) * k;
+      const chh = 40 + (CARD.h - 40) * k;
+      const cx0 = sx + (CARD.x - sx) * k;
+      const cy0 = sy + (CARD.y - sy) * k;
+      const rot = (idx % 2 === 0 ? -1 : 1) * 0.025 * k;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      ctx.translate(cx0 + cw / 2, cy0 + chh / 2);
+      ctx.rotate(rot);
+      ctx.translate(-(cx0 + cw / 2), -(cy0 + chh / 2));
+      ctx.shadowColor = 'rgba(70,45,30,0.32)'; ctx.shadowBlur = 26 * k; ctx.shadowOffsetY = 10 * k;
+      ctx.fillStyle = '#fffdf9';
+      drawRoundedRect(ctx, cx0, cy0, cw, chh + 84 * k, 18); ctx.fill();
+      ctx.shadowColor = 'transparent';
+      const pad = 16 * k + 4;
+      if (img) {
+        const zoom = 1 + 0.06 * kenburns;
+        const iw0 = cw - pad * 2; const ih0 = chh - pad * 2;
+        const ratio = Math.max(iw0 / img.width, ih0 / img.height) * zoom;
+        const iw = img.width * ratio; const ih = img.height * ratio;
+        ctx.save();
+        drawRoundedRect(ctx, cx0 + pad, cy0 + pad, iw0, ih0, 12); ctx.clip();
+        ctx.drawImage(img, cx0 + pad + (iw0 - iw) / 2, cy0 + pad + (ih0 - ih) / 2, iw, ih);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#f0e3d6';
+        drawRoundedRect(ctx, cx0 + pad, cy0 + pad, cw - pad * 2, chh - pad * 2, 12); ctx.fill();
+      }
+      if (k > 0.85) {
+        const capA = (k - 0.85) / 0.15;
+        ctx.globalAlpha = Math.min(alpha, capA);
+        ctx.fillStyle = '#43312c'; ctx.textAlign = 'center';
+        ctx.font = '700 30px "Noto Sans KR", sans-serif';
+        ctx.fillText((e.place || '').split(',')[0], W / 2, cy0 + chh + 40);
+        ctx.fillStyle = '#8a7364'; ctx.font = '500 23px "Noto Sans KR", sans-serif';
+        ctx.fillText(e.time || '', W / 2, cy0 + chh + 72);
+      }
+      ctx.restore();
+    };
+
+    const drawMapScene = (walkT, extra) => {
       const grad = ctx.createLinearGradient(0, 0, 0, H);
       grad.addColorStop(0, '#fdf6ee');
       grad.addColorStop(1, '#f3e2d0');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, W, H);
 
-      // 제목
-      ctx.fillStyle = '#43312c';
-      ctx.font = '700 44px Georgia, serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(title, W / 2, 110);
-      ctx.font = '500 26px "Noto Sans KR", sans-serif';
-      ctx.fillStyle = '#8a7364';
-      if (dateText) ctx.fillText(dateText, W / 2, 155);
-
-      // 현재 세그먼트 찾기
-      let acc = 0; let seg = segs[segs.length - 1]; let segElapsed = 0;
-      for (const s of segs) {
-        if (elapsed < acc + s.dur) { seg = s; segElapsed = elapsed - acc; break; }
-        acc += s.dur;
+      ctx.fillStyle = '#43312c'; ctx.textAlign = 'center';
+      ctx.font = '700 42px Georgia, serif';
+      ctx.fillText(title, W / 2, 105);
+      if (dateText) {
+        ctx.font = '500 24px "Noto Sans KR", sans-serif';
+        ctx.fillStyle = '#8a7364';
+        ctx.fillText(dateText, W / 2, 148);
       }
-      const p = Math.min(1, segElapsed / seg.dur);
 
-      // 현재까지의 경로 진행률
-      let walkT = 0;
-      if (seg.type === 'intro') walkT = 0;
-      else if (seg.type === 'walk') {
-        const from = seg.idx === 0 ? 0 : spotT[seg.idx - 1];
-        walkT = from + (spotT[seg.idx] - from) * p;
-      } else if (seg.type === 'photo') walkT = spotT[seg.idx];
-      else walkT = 1;
-
-      // 미니맵: 전체 경로(연한 선) + 진행 경로(진한 선) + 스팟 점
+      // 경로 글로우 + 전체 경로 + 진행 경로
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(160, 120, 95, 0.28)'; ctx.lineWidth = 6;
+      ctx.strokeStyle = 'rgba(160,120,95,0.25)'; ctx.lineWidth = 6;
       ctx.beginPath();
       path.forEach((pt, i) => (i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1])));
       ctx.stroke();
 
       const upto = Math.max(2, Math.ceil(walkT * (path.length - 1)) + 1);
+      ctx.save();
+      ctx.shadowColor = 'rgba(200,111,79,0.8)'; ctx.shadowBlur = 12;
       ctx.strokeStyle = '#c86f4f'; ctx.lineWidth = 7;
       ctx.beginPath();
       path.slice(0, upto).forEach((pt, i) => (i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1])));
       ctx.stroke();
+      ctx.restore();
 
       spotXY.forEach((pt, i) => {
         ctx.fillStyle = spotT[i] <= walkT + 1e-6 ? '#c86f4f' : 'rgba(160,120,95,0.4)';
@@ -2455,58 +2881,96 @@ async function createMemoryVideo() {
         ctx.beginPath(); ctx.arc(pt[0], pt[1], 4, 0, Math.PI * 2); ctx.fill();
       });
 
-      // 걷는 발자국
       const cur = pathPointAt(walkT);
       ctx.font = '34px serif';
-      ctx.fillText('🐾', cur[0], cur[1] - 14);
+      ctx.fillText('🐾', cur[0], cur[1] - 12);
 
-      // 사진 카드 (photo 세그먼트: 페이드 인/아웃)
-      if (seg.type === 'photo') {
-        const e = entries[seg.idx];
-        const img = images[seg.idx];
-        const alpha = p < 0.15 ? p / 0.15 : p > 0.9 ? (1 - p) / 0.1 : 1;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-        const cw = 560; const chh = 560;
-        const cx = (W - cw) / 2; const cy = 230;
-        ctx.translate(cx + cw / 2, cy + chh / 2);
-        ctx.rotate((seg.idx % 2 === 0 ? -1 : 1) * 0.02);
-        ctx.translate(-(cx + cw / 2), -(cy + chh / 2));
-        ctx.shadowColor = 'rgba(70,45,30,0.3)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
-        ctx.fillStyle = '#fffdf9';
-        drawRoundedRect(ctx, cx, cy, cw, chh + 90, 22); ctx.fill();
-        ctx.shadowColor = 'transparent';
-        if (img) {
-          const s = Math.max(cw - 40, chh - 40);
-          const ratio = Math.max((cw - 40) / img.width, (chh - 40) / img.height);
-          const iw = img.width * ratio; const ih = img.height * ratio;
-          ctx.save();
-          drawRoundedRect(ctx, cx + 20, cy + 20, cw - 40, chh - 40, 14); ctx.clip();
-          ctx.drawImage(img, cx + 20 + (cw - 40 - iw) / 2, cy + 20 + (chh - 40 - ih) / 2, iw, ih);
-          ctx.restore();
-        } else {
-          ctx.fillStyle = '#f0e3d6';
-          drawRoundedRect(ctx, cx + 20, cy + 20, cw - 40, chh - 40, 14); ctx.fill();
-          ctx.fillStyle = '#a08a7a'; ctx.font = '600 30px "Noto Sans KR", sans-serif';
-          ctx.fillText('사진 없는 기록', W / 2, cy + chh / 2);
-        }
-        ctx.fillStyle = '#43312c'; ctx.font = '700 30px "Noto Sans KR", sans-serif';
-        const placeText = (e.place || '').split(',')[0];
-        ctx.fillText(placeText, W / 2, cy + chh + 42);
-        ctx.fillStyle = '#8a7364'; ctx.font = '500 24px "Noto Sans KR", sans-serif';
-        ctx.fillText(e.time || '', W / 2, cy + chh + 76);
-        ctx.restore();
+      if (extra) extra();
+    };
+
+    const drawFrame = (elapsed) => {
+      let acc = 0; let seg = segs[segs.length - 1]; let segElapsed = 0;
+      for (const s of segs) {
+        if (elapsed < acc + s.dur) { seg = s; segElapsed = elapsed - acc; break; }
+        acc += s.dur;
+      }
+      const p = Math.min(1, segElapsed / seg.dur);
+
+      if (seg.type === 'globe') {
+        drawGlobeScene(ctx, W, H, p, title);
+        return;
       }
 
-      if (seg.type === 'intro' || seg.type === 'outro') {
-        ctx.fillStyle = '#43312c';
-        ctx.font = '600 30px "Noto Sans KR", sans-serif';
-        ctx.fillText(seg.type === 'intro' ? '그날의 발자취를 따라' : '— 오늘의 여정 끝 —', W / 2, 520);
-        if (seg.type === 'outro') {
-          ctx.font = '500 24px "Noto Sans KR", sans-serif';
-          ctx.fillStyle = '#8a7364';
-          ctx.fillText(`${entries.length}곳의 기억 · Travel Diary`, W / 2, 565);
-        }
+      // 현재 경로 진행률
+      let walkT = 0;
+      if (seg.type === 'fly') {
+        const from = seg.idx === 0 ? 0 : spotT[seg.idx - 1];
+        walkT = from + (spotT[seg.idx] - from) * easeInOutQuad(p);
+      } else if (seg.type === 'hold' || seg.type === 'tuck') walkT = spotT[seg.idx];
+      else walkT = 1;
+
+      if (seg.type === 'fly') {
+        drawMapScene(walkT, () => {
+          drawPolaroid(seg.idx, easeOutBack(p), Math.min(1, p * 2), 0);
+        });
+      } else if (seg.type === 'hold') {
+        drawMapScene(walkT, () => {
+          drawPolaroid(seg.idx, 1, 1, p);
+        });
+      } else if (seg.type === 'tuck') {
+        drawMapScene(walkT, () => {
+          drawPolaroid(seg.idx, 1 - easeInOutQuad(p) * 0.9, 1 - p, 1);
+        });
+      } else if (seg.type === 'outro') {
+        drawMapScene(1, () => {
+          // 폴라로이드 콜라주 부채꼴
+          const n = entries.length;
+          const shown = Math.ceil(easeInOutQuad(Math.min(1, p * 1.4)) * n);
+          const baseY = 420;
+          for (let i = 0; i < shown; i += 1) {
+            const img = images[i];
+            const spread = n === 1 ? 0 : (i / (n - 1) - 0.5);
+            const ang = spread * 0.5;
+            const px = W / 2 + spread * 300;
+            const py = baseY + Math.abs(spread) * 55;
+            ctx.save();
+            ctx.translate(px, py);
+            ctx.rotate(ang * 0.55);
+            ctx.shadowColor = 'rgba(70,45,30,0.28)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6;
+            ctx.fillStyle = '#fffdf9';
+            drawRoundedRect(ctx, -78, -78, 156, 186, 12); ctx.fill();
+            ctx.shadowColor = 'transparent';
+            if (img) {
+              const ratio = Math.max(136 / img.width, 136 / img.height);
+              const iw = img.width * ratio; const ih = img.height * ratio;
+              ctx.save();
+              drawRoundedRect(ctx, -68, -68, 136, 136, 8); ctx.clip();
+              ctx.drawImage(img, -iw / 2, -68 + (136 - ih) / 2, iw, ih);
+              ctx.restore();
+            } else {
+              ctx.fillStyle = '#f0e3d6';
+              drawRoundedRect(ctx, -68, -68, 136, 136, 8); ctx.fill();
+            }
+            ctx.restore();
+          }
+          if (p > 0.35) {
+            ctx.globalAlpha = Math.min(1, (p - 0.35) / 0.3);
+            ctx.fillStyle = '#43312c'; ctx.textAlign = 'center';
+            ctx.font = '600 30px "Noto Sans KR", sans-serif';
+            ctx.fillText('— 오늘의 여정 끝 —', W / 2, 720);
+            ctx.font = '500 24px "Noto Sans KR", sans-serif';
+            ctx.fillStyle = '#8a7364';
+            ctx.fillText(`${entries.length}곳의 기억 · Travel Diary`, W / 2, 762);
+            ctx.globalAlpha = 1;
+          }
+        });
+      }
+
+      // 지구본 → 지도 전환 직후 화이트 플래시 잔광
+      const sinceGlobe = elapsed - GLOBE;
+      if (sinceGlobe >= 0 && sinceGlobe < 350) {
+        ctx.fillStyle = `rgba(253,246,238,${1 - sinceGlobe / 350})`;
+        ctx.fillRect(0, 0, W, H);
       }
     };
 
@@ -2539,6 +3003,7 @@ async function createMemoryVideo() {
     console.error(error);
     showToast('영상 만들기에 실패했어요.');
   } finally {
+    if (audioCtx) audioCtx.close().catch(() => {});
     if (button) { button.disabled = false; button.textContent = '🎬 영상'; }
   }
 }

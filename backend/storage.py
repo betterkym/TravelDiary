@@ -160,6 +160,29 @@ def get_diary(trip_id: str) -> Optional[Diary]:
     return _load_diary(row["diary_json"])
 
 
+def list_trips_with_diaries() -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT trip_id, meta_json, diary_json
+            FROM trips
+            WHERE diary_json IS NOT NULL
+            ORDER BY rowid DESC
+            """
+        ).fetchall()
+
+    trips = []
+    for row in rows:
+        trips.append(
+            {
+                "trip_id": row["trip_id"],
+                "meta": json.loads(row["meta_json"]) if row["meta_json"] else {},
+                "diary": _load_diary(row["diary_json"]),
+            }
+        )
+    return trips
+
+
 def exists(trip_id: str) -> bool:
     with _connect() as conn:
         row = conn.execute("SELECT 1 FROM trips WHERE trip_id = ?", (trip_id,)).fetchone()

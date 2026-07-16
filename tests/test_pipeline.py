@@ -89,5 +89,69 @@ def test_generate_prefers_photo_gps_over_manual_locations():
     assert len(diary["route"]["stops"]) == 1
 
 
+def test_list_trips_returns_saved_diaries_for_calendar_sync():
+    trip_ids = []
+    for title, start_date, offset in [
+        ("모바일 동기화 1", "2026-07-10", 0),
+        ("모바일 동기화 2", "2026-07-11", 1),
+    ]:
+        r = client.post(
+            "/api/trips",
+            json={
+                "title": title,
+                "start_date": start_date,
+                "region": "서울",
+            },
+        )
+        assert r.status_code == 200
+        trip_id = r.json()["trip_id"]
+        trip_ids.append((trip_id, start_date))
+
+        when = datetime(2026, 7, 10 + offset, 9, 0, tzinfo=timezone.utc)
+        r = client.post(
+            f"/api/trips/{trip_id}/locations",
+            json={
+                "points": [
+                    {"lat": 37.5 + offset * 0.01, "lng": 127.0, "time": when.isoformat()},
+                    {"lat": 37.501 + offset * 0.01, "lng": 127.001, "time": (when + timedelta(minutes=20)).isoformat()},
+                ]
+            },
+        )
+        assert r.status_code == 200
+
+        storage.add_photos(
+            trip_id,
+            [
+                Photo(
+                    photo_id=f"sync_{offset}_1",
+                    filename=f"sync_{offset}_1.jpg",
+                    taken_at=when,
+                    lat=37.5 + offset * 0.01,
+                    lng=127.0,
+                ),
+                Photo(
+                    photo_id=f"sync_{offset}_2",
+                    filename=f"sync_{offset}_2.jpg",
+                    taken_at=when + timedelta(minutes=5),
+                    lat=37.501 + offset * 0.01,
+                    lng=127.001,
+                ),
+            ],
+        )
+
+        r = client.post(f"/api/trips/{trip_id}/generate")
+        assert r.status_code == 200
+
+    r = client.get("/api/trips")
+    assert r.status_code == 200
+    trips = r.json()["trips"]
+    trips_by_id = {trip["trip_id"]: trip for trip in trips}
+
+    for trip_id, start_date in trip_ids:
+        assert trip_id in trips_by_id
+        assert trips_by_id[trip_id]["date"] == start_date
+        assert trips_by_id[trip_id]["diary"]["timeline"]
+
+
 def test_unknown_trip_404():
     assert client.get("/api/trips/nope/diary").status_code == 404

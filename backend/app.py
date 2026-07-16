@@ -42,6 +42,25 @@ def create_trip(trip: TripCreate):
     return {"trip_id": trip_id}
 
 
+@app.get("/api/trips")
+def list_trips():
+    trips = []
+    for item in storage.list_trips_with_diaries():
+        diary = item["diary"]
+        meta = item["meta"]
+        first_entry_date = diary.timeline[0].time.date().isoformat() if diary.timeline else ""
+        trips.append(
+            {
+                "trip_id": item["trip_id"],
+                "title": diary.title or meta.get("title", ""),
+                "date": meta.get("start_date") or first_entry_date,
+                "region": meta.get("region", ""),
+                "diary": diary,
+            }
+        )
+    return {"trips": trips}
+
+
 @app.post("/api/trips/{trip_id}/locations")
 def add_locations(trip_id: str, batch: LocationBatch):
     _require_trip(trip_id)

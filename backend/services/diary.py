@@ -26,12 +26,28 @@ def annotate(entries: list[TimelineEntry]) -> list[TimelineEntry]:
 
 
 def make_title(entries: list[TimelineEntry], region: str = "") -> str:
-    """여행 제목 생성. AI 없으면 지역/장소 기반 fallback."""
+    """여행 제목 생성: 특정 사진이 아니라 전체 스팟을 보고 짓는다.
+
+    - 가장 자주 등장한 장소(최빈)를 앵커로 사용
+    - 여행이 5시간 이상 이어졌으면 '~에서의 하루'
+    """
+    from collections import Counter
+
+    skip = {"이동 중", "장소 미정", "정차 지점"}
+    places = [
+        e.place.split(",")[0].strip()
+        for e in entries
+        if e.place and e.place not in skip
+    ]
+    if places:
+        anchor = Counter(places).most_common(1)[0][0]
+        times = sorted(e.time for e in entries if e.time)
+        span_h = (
+            (times[-1] - times[0]).total_seconds() / 3600 if len(times) >= 2 else 0
+        )
+        return f"{anchor}에서의 하루" if span_h >= 5 else f"{anchor} 여행 기록"
     if region:
         return f"{region} 여행 기록"
-    for e in entries:
-        if e.place and e.place not in ("이동 중", "장소 미정", "정차 지점"):
-            return f"{e.place} 여행 기록"
     return "여행 기록"
 
 
