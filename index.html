@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#f7c8a6" />
     <title>Travel Diary MVP</title>
+    <link rel="manifest" href="manifest.json" />
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.26.0/mapbox-gl.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <script defer src="config.local.js"></script>
@@ -19,6 +20,10 @@
         <div class="hero-copy">
           <h1 id="create-title">새 여행 시작</h1>
           <p>여행 제목과 기본 정보를 입력하고 기록을 시작해 보세요.</p>
+          <div class="hero-actions">
+            <button class="secondary-button" type="button" id="open-diary-button" data-nav="diary">다이어리 바로가기</button>
+            <button class="secondary-button" type="button" id="create-photo-import-button">여행 사진 업로드</button>
+          </div>
         </div>
 
         <form class="card form-card" id="create-form">
@@ -41,9 +46,8 @@
       <section class="screen screen--map" data-screen="map" hidden aria-labelledby="map-title">
         <header class="top-bar">
           <div class="segment-tabs" aria-label="화면 전환">
-            <button class="segment-button segment-button--back" type="button" data-nav="back" aria-label="이전 화면">←</button>
             <button class="segment-button is-active" type="button" data-nav="map">지도</button>
-            <button class="segment-button" type="button" data-nav="diary" disabled aria-disabled="true">다이어리</button>
+            <button class="segment-button" type="button" data-nav="diary">다이어리</button>
           </div>
           <div class="trip-chip" id="trip-summary-text"></div>
         </header>
@@ -52,6 +56,7 @@
           <div class="map-canvas" aria-label="지도 영역">
             <div id="map" class="mapbox-map"></div>
             <div class="map-overlay">
+              <button class="segment-button segment-button--back map-back-button" type="button" data-nav="back" aria-label="이전 화면">←</button>
               <div class="recording-badge" id="recording-badge" hidden>
                 <span class="status-pill">기록 중</span>
                 <span id="recording-time">00:00:00</span>

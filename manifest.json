@@ -1,0 +1,10 @@
+{
+  "name": "Travel Diary",
+  "short_name": "Travel Diary",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7efe6",
+  "theme_color": "#f7c8a6",
+  "icons": []
+}

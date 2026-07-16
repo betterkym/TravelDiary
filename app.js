@@ -3,9 +3,10 @@ const API_BASE_URL = window.API_BASE_URL || '';
 const PHOTO_SPOT_RADIUS_M = 100;
 const PHOTO_SPOT_MIN_DURATION_MS = 10 * 60 * 1000;
 const PHOTO_SPOT_MIN_COUNT = 3;
-const PHOTO_SPOT_GAP_MS = 10 * 60 * 1000;
+const PHOTO_SPOT_GAP_MS = 5 * 60 * 1000;
 const FOOTPRINT_MIN_DISTANCE_M = 12;
-const FOOTPRINT_MIN_GAP_MS = 8000;
+const FOOTPRINT_MIN_GAP_MS = 15 * 1000;
+const FOOTPRINT_MIN_REPEAT_DISTANCE_M = 1;
 const CREATE_FORM_STORAGE_KEY = 'travel-diary:create-form';
 
 const state = {
@@ -68,6 +69,8 @@ const elements = {
   diaryScreen: document.querySelector('[data-screen="diary"]'),
   createForm: document.getElementById('create-form'),
   createTripButton: document.getElementById('create-trip-button'),
+  createDiaryButton: document.getElementById('open-diary-button'),
+  createPhotoImportButton: document.getElementById('create-photo-import-button'),
   tripTitle: document.getElementById('trip-title'),
   tripDate: document.getElementById('trip-date'),
   tripRegion: document.getElementById('trip-region'),
@@ -482,10 +485,14 @@ function handlePosition(position) {
   centerMapOn(lngLat);
   updateRecordingTimer();
 
+  const distanceFromLastFootprint = state.lastFootprintLngLat
+    ? distanceMeters(state.lastFootprintLngLat, lngLat)
+    : Infinity;
+  const timeSinceLastFootprint = timestamp - state.lastFootprintAt;
   const shouldDropFootprint =
     !state.lastFootprintLngLat ||
-    distanceMeters(state.lastFootprintLngLat, lngLat) >= FOOTPRINT_MIN_DISTANCE_M ||
-    timestamp - state.lastFootprintAt >= FOOTPRINT_MIN_GAP_MS;
+    (timeSinceLastFootprint >= FOOTPRINT_MIN_GAP_MS &&
+      distanceFromLastFootprint > FOOTPRINT_MIN_REPEAT_DISTANCE_M);
 
   if (shouldDropFootprint) {
     addFootprint(lngLat);
@@ -554,16 +561,35 @@ function endRecording() {
   showToast('여행 사진 불러오기 버튼을 눌러 사진첩에서 사진을 선택해 주세요');
 }
 
-function buildClusters(photos) {
+function getLocalDateKey(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildClusters(photos, allowCrossDate = false) {
   const groups = [];
   for (const photo of photos) {
     const lastGroup = groups[groups.length - 1];
     const photoPoint = [photo.lng, photo.lat];
     const photoTime = photo.takenAt.getTime();
-    if (lastGroup) {
+    const photoDateKey = getLocalDateKey(photo.takenAt);
+    const photoPlaceKey = `${photoDateKey}:${Math.round(photo.lat * 1000)}:${Math.round(photo.lng * 1000)}`;
+    if (
+      lastGroup &&
+      (allowCrossDate || lastGroup.dateKey === photoDateKey) &&
+      lastGroup.placeKey === photoPlaceKey
+    ) {
       const gap = photoTime - lastGroup.lastTakenAt;
-      const distance = distanceMeters(lastGroup.center, photoPoint);
-      if (gap <= PHOTO_SPOT_GAP_MS && distance <= PHOTO_SPOT_RADIUS_M) {
+      const distanceToAnchor = distanceMeters(lastGroup.anchorCenter, photoPoint);
+      const distanceToCenter = distanceMeters(lastGroup.center, photoPoint);
+      if (
+        gap <= PHOTO_SPOT_GAP_MS &&
+        distanceToAnchor <= PHOTO_SPOT_RADIUS_M &&
+        distanceToCenter <= PHOTO_SPOT_RADIUS_M
+      ) {
         lastGroup.photos.push(photo);
         lastGroup.lastTakenAt = photoTime;
         lastGroup.center = [
@@ -576,8 +602,11 @@ function buildClusters(photos) {
     groups.push({
       photos: [photo],
       center: photoPoint,
+      anchorCenter: photoPoint,
       firstTakenAt: photoTime,
       lastTakenAt: photoTime,
+      dateKey: photoDateKey,
+      placeKey: photoPlaceKey,
     });
   }
   return groups;
@@ -605,6 +634,30 @@ function formatTimeLabel(date) {
   return new Intl.DateTimeFormat('ko-KR', {
     hour: 'numeric',
     minute: '2-digit',
+  }).format(date);
+}
+
+function formatRoundedTimeLabel(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const rounded = new Date(date.getTime());
+  const minutes = rounded.getMinutes();
+  rounded.setMinutes(minutes < 15 ? 0 : minutes < 45 ? 30 : 0);
+  if (minutes >= 45) {
+    rounded.setHours(rounded.getHours() + 1);
+  }
+  rounded.setSeconds(0, 0);
+  const hour = rounded.getHours();
+  const minute = rounded.getMinutes();
+  const period = hour >= 12 ? '오후' : '오전';
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+  const minuteText = minute === 0 ? '정각' : '30분';
+  return `${period} ${displayHour}시 ${minuteText}`;
+}
+
+function formatMonthDay(date) {
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: 'numeric',
+    day: 'numeric',
   }).format(date);
 }
 
@@ -643,34 +696,36 @@ async function generateDiaryFromFiles(files) {
 
   photoData.sort((a, b) => a.takenAt - b.takenAt);
   const photoById = new Map(photoData.map((photo) => [photo.id, photo]));
-  const clusters = buildClusters(photoData);
-  const qualifying = clusters.filter((cluster) => {
-    const duration = cluster.lastTakenAt - cluster.firstTakenAt;
-    return cluster.photos.length >= PHOTO_SPOT_MIN_COUNT && duration >= PHOTO_SPOT_MIN_DURATION_MS;
-  });
-
-  const targetClusters = qualifying.length ? qualifying : clusters.slice(0, 1);
+  const dateKeys = [...new Set(photoData.map((photo) => getLocalDateKey(photo.takenAt)).filter(Boolean))];
+  const allowCrossDate = dateKeys.length > 1
+    ? window.confirm('사진 날짜가 달라요. 같은 여행으로 이어서 묶을까요?')
+    : false;
+  const clusters = buildClusters(photoData, allowCrossDate);
+  const targetClusters = clusters;
   const entries = [];
+  const tripName = state.trip.title || '여행';
 
   for (let i = 0; i < targetClusters.length; i += 1) {
     const cluster = targetClusters[i];
     const firstPhoto = cluster.photos[0];
     const durationMinutes = Math.max(1, Math.round((cluster.lastTakenAt - cluster.firstTakenAt) / 60000));
-    const timeLabel = formatTimeLabel(firstPhoto.takenAt);
+    const timeLabel = formatRoundedTimeLabel(firstPhoto.takenAt);
+    const dayIndex = i + 1;
     const fallbackPlace = `기록 스팟 ${i + 1}`;
     const place = await resolvePlaceName(cluster.center[0], cluster.center[1], fallbackPlace);
     const photoCount = cluster.photos.length;
-    const photoUrls = cluster.photos.map((photo) => photo.url);
-    const selectedPhoto = cluster.photos[0];
+    const photoUrls = cluster.photos.slice(0, 3).map((photo) => photo.url);
+    const selectedPhotos = cluster.photos.slice(0, 3);
     entries.push({
-      photoId: selectedPhoto.id,
-      photoIds: cluster.photos.map((photo) => photo.id),
+      photoId: selectedPhotos[0].id,
+      photoIds: selectedPhotos.map((photo) => photo.id),
       time: timeLabel,
+      dateLabel: `${formatMonthDay(firstPhoto.takenAt)} · ${tripName}`,
+      dayLabel: `${dayIndex}일차`,
       place,
       note: `반경 ${PHOTO_SPOT_RADIUS_M}m 안에서 ${durationMinutes}분 동안 머무르며 사진 ${photoCount}장을 기록했어요.`,
       photoCount,
       photoUrls,
-      mainPhoto: photoUrls[0],
       center: cluster.center,
       timestamp: firstPhoto.takenAt,
       durationMinutes,
@@ -709,7 +764,10 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
           </div>
           <div class="timeline-card">
             <div class="timeline-meta">
-              <p class="timeline-time">${entry.time}</p>
+              <div class="timeline-time-stack">
+                <p class="timeline-date">${entry.dateLabel || ''}</p>
+                <p class="timeline-time">${entry.dayLabel ? `${entry.dayLabel} · ${entry.time}` : entry.time}</p>
+              </div>
               <button class="timeline-button" type="button" data-view-map="${index}">지도에서 보기</button>
             </div>
             <h3 class="timeline-place">${entry.place}</h3>
@@ -717,6 +775,7 @@ function renderTimeline(entries = state.generatedDiary || state.sampleTimeline) 
               <p class="timeline-count">${entry.photoCount ? `사진 ${entry.photoCount}장` : ''}</p>
               <p class="timeline-count">${entry.durationMinutes ? `${entry.durationMinutes}분 기록` : ''}</p>
             </div>
+            ${photoUrls.length >= 3 ? '<p class="timeline-note timeline-note--hint">대표 사진 3장을 골라 보여드려요.</p>' : ''}
             ${gallery}
             <p class="timeline-note">${entry.note}</p>
           </div>
@@ -856,7 +915,6 @@ function handleNav(target) {
     }
     return;
   }
-  if (target === 'diary' && !state.diaryUnlocked) return;
   setScreen(target);
   if (target === 'map') {
     setMapState(state.mapState);
@@ -949,6 +1007,11 @@ function bootstrap() {
     createTrip();
   });
   elements.createTripButton.addEventListener('click', createTrip);
+  elements.createDiaryButton?.addEventListener('click', () => handleNav('diary'));
+  elements.createPhotoImportButton?.addEventListener('click', () => {
+    elements.photoInput.value = '';
+    elements.photoInput.click();
+  });
   elements.tripTitle.addEventListener('input', saveCreateFormState);
   elements.tripDate.addEventListener('input', saveCreateFormState);
   elements.tripRegion.addEventListener('input', saveCreateFormState);
@@ -970,6 +1033,13 @@ function bootstrap() {
       showToast('사진 업로드 또는 처리 중 오류가 발생했어요.');
     }
   });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').catch((error) => {
+      console.warn('service worker registration failed', error);
+    });
+  }
+
   elements.timeline.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-feedback-photo]');
     if (!button) return;
