@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from backend import config
 from backend import storage
 from backend.app import app
 from backend.models import Photo
@@ -199,3 +200,16 @@ def test_latest_trip_ignores_empty_drafts():
 
 def test_unknown_trip_404():
     assert client.get("/api/trips/nope/diary").status_code == 404
+
+
+def test_frontend_config_is_served_from_environment(monkeypatch):
+    monkeypatch.setattr(config, "MAPBOX_ACCESS_TOKEN", "pk.test-token")
+    monkeypatch.setattr(config, "API_BASE_URL", "https://api.example.test")
+
+    r = client.get("/config.js")
+
+    assert r.status_code == 200
+    assert "text/javascript" in r.headers["content-type"]
+    assert "pk.test-token" in r.text
+    assert "https://api.example.test" in r.text
+    assert "AI_API_KEY" not in r.text

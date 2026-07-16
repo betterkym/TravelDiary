@@ -10,11 +10,13 @@ README '예정 API' 5개를 구현합니다. 각 엔드포인트는 storage/pipe
 """
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline, storage
@@ -165,6 +167,21 @@ def health():
         "mapbox_configured": bool(config.MAPBOX_ACCESS_TOKEN),
         "ai_configured": bool(config.AI_API_KEY),
     }
+
+
+@app.get("/config.js", include_in_schema=False)
+def frontend_config():
+    body = (
+        "window.MAPBOX_ACCESS_TOKEN = window.MAPBOX_ACCESS_TOKEN || "
+        f"{json.dumps(config.MAPBOX_ACCESS_TOKEN)};\n"
+        "window.API_BASE_URL = window.API_BASE_URL || "
+        f"{json.dumps(config.API_BASE_URL)};\n"
+    )
+    return Response(
+        content=body,
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _serialize_locations(points):
